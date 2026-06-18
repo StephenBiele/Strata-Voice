@@ -97,11 +97,11 @@ A terminal-only push-to-talk loop is also included:
 Most things are set in the **Settings** page, but a few startup options are env vars:
 
 | Var | Default | Notes |
-|---|---|---|
+| :--- | :--- | :--- |
 | `VOICE_PORT` | `8765` | web server port |
 | `VOICE_NAME` | `Sage` | initial assistant name (also editable in Settings) |
 | `VOICE_LLM_MODEL` | `qwen3.5:4b` | default Ollama model |
-| `OLLAMA_URL` | `http://localhost:11434` | |
+| `OLLAMA_URL` | `http://localhost:11434` | URL endpoint for local Ollama server |
 
 ## How memory works
 
