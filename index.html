@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>{{ASSISTANT_NAME}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,340;9..144,440;9..144,560&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper: oklch(0.965 0.013 115);
+    --paper-deep: oklch(0.935 0.018 118);
+    --ink: oklch(0.34 0.045 132);
+    --ink-soft: oklch(0.50 0.035 132);
+    --ink-faint: oklch(0.62 0.028 132 / .7);
+    --sage: oklch(0.80 0.075 130);
+    --sage-deep: oklch(0.66 0.10 133);
+    --sage-edge: oklch(0.58 0.095 135);
+    --clay: oklch(0.60 0.12 38);
+    --line: oklch(0.34 0.045 132 / .12);
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --level: 0;            /* live audio 0..1, set by JS */
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+  body{
+    font-family:"Hanken Grotesk", system-ui, sans-serif;
+    color:var(--ink);
+    background:
+      radial-gradient(120% 80% at 50% -10%, var(--paper) 0%, var(--paper-deep) 70%, oklch(0.91 0.02 120) 100%);
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+  }
+  /* faint paper grain */
+  body::after{
+    content:""; position:fixed; inset:0; pointer-events:none; opacity:.035; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .stage{ position:fixed; inset:0; display:grid; }
+  .view{
+    grid-area:1/1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    transition:opacity .6s var(--ease), transform .6s var(--ease);
+  }
+  .view[hidden]{ display:flex; opacity:0; pointer-events:none; transform:scale(.985); }
+
+  /* ---------- landing ---------- */
+  #landing{ gap:clamp(1.8rem,5vh,3rem); padding:2rem; text-align:center; }
+  .mark{ position:relative; width:clamp(150px,32vw,210px); aspect-ratio:1; }
+  .wordmark{
+    font-family:"Fraunces", serif; font-optical-sizing:auto; font-weight:440;
+    font-size:clamp(3.2rem,10vw,5.4rem); line-height:.94; letter-spacing:-.02em;
+    color:var(--ink);
+  }
+  .tagline{
+    max-width:34ch; font-size:clamp(1rem,2.4vw,1.18rem); color:var(--ink-soft);
+    line-height:1.5; font-weight:400;
+  }
+  .tagline em{ font-family:"Fraunces",serif; font-style:italic; font-weight:440; color:var(--ink); }
+  .begin{
+    appearance:none; border:none; cursor:pointer; font-family:inherit;
+    font-size:1.02rem; font-weight:600; letter-spacing:.01em; color:var(--paper);
+    padding:.95em 2.4em; border-radius:999px;
+    background:linear-gradient(180deg, var(--sage-deep), var(--sage-edge));
+    box-shadow:0 1px 0 oklch(1 0 0 / .3) inset, 0 18px 34px -16px var(--sage-edge);
+    transition:transform .25s var(--ease), box-shadow .25s var(--ease), filter .25s var(--ease);
+  }
+  .begin:hover{ transform:translateY(-2px); filter:brightness(1.04); box-shadow:0 1px 0 oklch(1 0 0 / .35) inset, 0 24px 40px -16px var(--sage-edge); }
+  .begin:active{ transform:translateY(0); }
+  .hint{ font-size:.86rem; color:var(--ink-faint); letter-spacing:.02em; }
+  .hint kbd{
+    font-family:inherit; font-size:.8rem; padding:.18em .55em; border-radius:.5em;
+    background:oklch(0.34 0.045 132 / .07); border:1px solid var(--line); color:var(--ink-soft);
+  }
+
+  /* ---------- call ---------- */
+  #call{ justify-content:space-between; padding:clamp(1.4rem,4vh,2.6rem) 1.5rem; }
+  .topbar{ text-align:center; opacity:0; transition:opacity .8s var(--ease) .2s; }
+  #call:not([hidden]) .topbar{ opacity:1; }
+  .name{
+    font-family:"Fraunces",serif; font-weight:440; font-size:clamp(1.5rem,4vw,2rem);
+    letter-spacing:-.01em; color:var(--ink);
+    display:inline-flex; gap:.5ch; align-items:baseline;
+  }
+  .timer{ font-variant-numeric:tabular-nums; color:var(--ink-faint); font-weight:540; }
+  .byline{ margin-top:.15rem; font-size:.82rem; color:var(--ink-faint); letter-spacing:.04em; }
+
+  /* orb cluster */
+  .orbwrap{
+    position:relative; flex:1; width:100%;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .cluster{
+    position:relative; width:clamp(220px,52vmin,420px); aspect-ratio:1;
+    display:flex; align-items:center; justify-content:center;
+    /* breathing + audio-reactive scale combined */
+    transform:scale(calc(1 + var(--level) * 0.16));
+    transition:transform .09s linear;
+  }
+  .breath{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    animation:breathe 6.5s ease-in-out infinite;
+  }
+  @keyframes breathe{ 0%,100%{ transform:scale(.985); } 50%{ transform:scale(1.02); } }
+
+  .halo{
+    position:absolute; width:128%; aspect-ratio:1; border-radius:50%;
+    background:radial-gradient(circle at 50% 50%, var(--sage) 0%, oklch(0.80 0.075 130 / .35) 40%, transparent 68%);
+    filter:blur(8px);
+    opacity:calc(.5 + var(--level) * .5);
+    transition:opacity .12s linear;
+  }
+  .ring{
+    position:absolute; inset:0; margin:auto; width:100%; aspect-ratio:1; border-radius:50%;
+    border:1px solid var(--sage-deep); opacity:0;
+  }
+  .state-listening .ring{ animation:ripple 2.4s var(--ease) infinite; }
+  .state-speaking  .ring{ animation:ripple 3s var(--ease) infinite; }
+  .ring:nth-child(2){ animation-delay:.8s; }
+  .ring:nth-child(3){ animation-delay:1.6s; }
+  @keyframes ripple{
+    0%{ transform:scale(.82); opacity:.0; }
+    18%{ opacity:.32; }
+    100%{ transform:scale(1.5); opacity:0; }
+  }
+
+  .orb{
+    position:relative; width:62%; aspect-ratio:1; border-radius:50%;
+    background:
+      radial-gradient(circle at 38% 30%, oklch(0.97 0.04 122 / .95) 0%, transparent 42%),
+      radial-gradient(circle at 50% 52%, var(--sage) 0%, var(--sage-deep) 66%, var(--sage-edge) 100%);
+    box-shadow:
+      inset -18px -26px 56px oklch(0.52 0.10 136 / .55),
+      inset 18px 20px 46px oklch(0.98 0.05 120 / .55),
+      0 46px 80px -34px oklch(0.58 0.12 136 / .6);
+    overflow:hidden;
+    isolation:isolate;
+  }
+  /* slow inner sheen so the sphere always feels alive.
+     Circular (border-radius:50%) so it never shows a bounding box even when
+     a parent transform makes the browser fall back from rounded-corner clip. */
+  .orb::before{
+    content:""; position:absolute; inset:0; border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0%, oklch(0.95 0.05 124 / .35) 18%, transparent 42%, oklch(0.62 0.10 138 / .3) 70%, transparent 92%);
+    animation:swirl 14s linear infinite; opacity:.6; mix-blend-mode:soft-light;
+  }
+  @keyframes swirl{ to{ transform:rotate(1turn); } }
+  .state-thinking .orb::before{ animation-duration:3.4s; opacity:.9; }
+  .state-thinking .orb{ filter:saturate(1.08); }
+
+  .caption{
+    min-height:3.2em; max-width:30ch; margin:0 auto; text-align:center;
+    font-size:clamp(1.02rem,2.7vw,1.22rem); line-height:1.35; color:var(--ink-soft);
+    opacity:0; transition:opacity .5s var(--ease); padding:0 1rem;
+  }
+  .caption.show{ opacity:1; }
+  .caption.user{ font-style:normal; color:var(--ink-faint); font-size:.98rem; }
+  .caption .lead{ font-family:"Fraunces",serif; font-style:italic; }
+
+  .statuslabel{
+    text-transform:uppercase; letter-spacing:.22em; font-size:.7rem; font-weight:600;
+    color:var(--ink-faint); height:1em; transition:color .3s var(--ease);
+  }
+
+  /* controls */
+  .controls{ display:flex; align-items:center; gap:.9rem; }
+  .ptt{
+    appearance:none; border:none; cursor:pointer; font-family:inherit; user-select:none;
+    -webkit-user-select:none; touch-action:none;
+    font-size:.98rem; font-weight:600; color:var(--ink);
+    padding:.9em 1.6em; border-radius:999px;
+    background:oklch(0.99 0.01 120 / .7); border:1px solid var(--line);
+    box-shadow:0 10px 24px -18px oklch(0.4 0.05 130 / .8);
+    display:inline-flex; align-items:center; gap:.6em;
+    transition:transform .14s var(--ease), background .2s var(--ease), box-shadow .2s var(--ease), color .2s var(--ease);
+  }
+  .ptt .dot{ width:.62em; height:.62em; border-radius:50%; background:var(--sage-deep); transition:transform .2s var(--ease), background .2s; }
+  .ptt.active{
+    color:var(--paper); background:linear-gradient(180deg,var(--sage-deep),var(--sage-edge));
+    transform:translateY(-1px); box-shadow:0 16px 30px -16px var(--sage-edge);
+  }
+  .ptt.active .dot{ background:var(--paper); transform:scale(1.25); }
+  .ptt:disabled{ opacity:.45; cursor:default; }
+
+  .end{
+    appearance:none; cursor:pointer; font-family:inherit; font-size:.92rem; font-weight:600;
+    color:var(--clay); background:transparent; border:1px solid oklch(0.60 0.12 38 / .35);
+    padding:.86em 1.3em; border-radius:999px;
+    display:inline-flex; align-items:center; gap:.55em;
+    transition:background .2s var(--ease), transform .14s var(--ease);
+  }
+  .end:hover{ background:oklch(0.60 0.12 38 / .08); }
+  .end .sq{ width:.6em; height:.6em; border-radius:2px; background:var(--clay); }
+
+  .memflash{
+    position:fixed; left:50%; bottom:calc(clamp(1.4rem,4vh,2.6rem) + 4.6rem); transform:translateX(-50%) translateY(8px);
+    font-size:.82rem; color:var(--sage-edge); letter-spacing:.02em;
+    opacity:0; pointer-events:none; transition:opacity .4s var(--ease), transform .4s var(--ease);
+    display:inline-flex; gap:.4em; align-items:center;
+  }
+  .memflash.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* ---------- landing nav ---------- */
+  .landingnav{ display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:.7rem; font-size:.9rem; margin-top:-.4rem; }
+  .landingnav button{
+    appearance:none; background:none; border:none; cursor:pointer; font-family:inherit;
+    color:var(--ink-soft); font-size:.9rem; font-weight:500; padding:.2em .1em;
+    border-bottom:1px solid transparent; transition:color .2s var(--ease), border-color .2s var(--ease);
+  }
+  .landingnav button:hover{ color:var(--ink); border-color:var(--sage-deep); }
+  .landingnav span{ color:var(--ink-faint); }
+
+  /* ---------- panels (chats / memories / files) ---------- */
+  .panel{ justify-content:flex-start; align-items:stretch; padding:0; }
+  .panelhead{
+    display:flex; align-items:center; gap:1rem; width:100%; max-width:680px; margin:0 auto;
+    padding:clamp(1.4rem,4vh,2.2rem) clamp(1.2rem,5vw,2.4rem) 1rem;
+  }
+  .panelhead h2{
+    font-family:"Fraunces",serif; font-weight:440; font-size:clamp(1.5rem,4vw,2rem);
+    color:var(--ink); letter-spacing:-.01em;
+  }
+  .back{
+    appearance:none; border:1px solid var(--line); background:oklch(0.99 0.01 120 / .6); cursor:pointer;
+    width:2.4rem; height:2.4rem; border-radius:50%; font-size:1.15rem; color:var(--ink-soft); flex:none;
+    display:flex; align-items:center; justify-content:center;
+    transition:background .2s var(--ease), transform .15s var(--ease);
+  }
+  .back:hover{ background:oklch(0.97 0.02 120); transform:translateX(-2px); }
+  .panelbody{
+    width:100%; max-width:680px; margin:0 auto; flex:1; overflow-y:auto;
+    padding:.5rem clamp(1.2rem,5vw,2.4rem) 3rem;
+  }
+  .paneltip{ color:var(--ink-faint); font-size:.9rem; margin:.4rem 0 1.4rem; line-height:1.5; }
+
+  .row{
+    display:flex; align-items:center; gap:1rem; padding:1rem 1.1rem; border-radius:1rem; margin-bottom:.7rem;
+    background:oklch(0.99 0.01 120 / .55); border:1px solid var(--line);
+    transition:background .2s var(--ease), transform .15s var(--ease), box-shadow .2s var(--ease);
+  }
+  .row.clickable{ cursor:pointer; }
+  .row.clickable:hover{ background:oklch(0.985 0.015 120); transform:translateY(-1px); box-shadow:0 12px 28px -22px oklch(0.4 0.05 130 / .8); }
+  .row .grow{ flex:1; min-width:0; }
+  .row .title{ font-weight:600; color:var(--ink); margin-bottom:.15rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row.memitem .title{ white-space:normal; font-weight:500; }
+  .row .sub{ font-size:.82rem; color:var(--ink-faint); }
+  .row .x{
+    appearance:none; border:none; background:transparent; cursor:pointer; color:var(--ink-faint); flex:none;
+    width:1.9rem; height:1.9rem; border-radius:50%; font-size:.85rem;
+    transition:background .2s, color .2s;
+  }
+  .row .x:hover{ background:oklch(0.60 0.12 38 / .12); color:var(--clay); }
+
+  .empty{ text-align:center; color:var(--ink-faint); padding:3rem 1rem; line-height:1.6; }
+  .empty .big{ font-family:"Fraunces",serif; font-style:italic; font-size:1.3rem; color:var(--ink-soft); display:block; margin-bottom:.4rem; }
+
+  .uploadbtn{
+    display:inline-flex; align-items:center; gap:.5em; cursor:pointer; font-weight:600; color:var(--paper);
+    padding:.8em 1.5em; border-radius:999px; background:linear-gradient(180deg,var(--sage-deep),var(--sage-edge));
+    box-shadow:0 14px 28px -16px var(--sage-edge); transition:transform .2s var(--ease), filter .2s var(--ease);
+  }
+  .uploadbtn:hover{ transform:translateY(-1px); filter:brightness(1.04); }
+
+  .bubble{ max-width:80%; padding:.7rem 1rem; border-radius:1.1rem; margin-bottom:.6rem; line-height:1.42; font-size:.98rem; }
+  .bubble.user{ margin-left:auto; background:linear-gradient(180deg, oklch(0.86 0.06 130), oklch(0.80 0.075 132)); color:oklch(0.26 0.05 135); border-bottom-right-radius:.35rem; }
+  .bubble.assistant{ margin-right:auto; background:oklch(0.99 0.01 120 / .75); border:1px solid var(--line); color:var(--ink); border-bottom-left-radius:.35rem; }
+
+  /* ---------- profile form ---------- */
+  .panelsub{ color:var(--ink-soft); font-size:.98rem; line-height:1.5; margin:-.1rem 0 1.2rem; max-width:44ch; }
+  .localnote{
+    display:flex; align-items:center; gap:.55em; margin:0 0 1.7rem; font-size:.84rem; color:var(--sage-edge);
+    padding:.7em .9em; border-radius:.8rem; background:oklch(0.80 0.075 130 / .14); width:fit-content;
+  }
+  .localnote svg{ flex:none; }
+  .field{ margin-bottom:1.1rem; }
+  .field label{ display:block; font-size:.82rem; font-weight:600; color:var(--ink-soft); margin-bottom:.4rem; letter-spacing:.01em; }
+  .field input{
+    width:100%; font-family:inherit; font-size:1rem; color:var(--ink);
+    padding:.8em 1em; border-radius:.85rem; border:1px solid var(--line);
+    background:oklch(0.99 0.01 120 / .7); transition:border-color .2s var(--ease), box-shadow .2s var(--ease);
+  }
+  .field input::placeholder{ color:var(--ink-faint); }
+  .field input:focus{ outline:none; border-color:var(--sage-deep); box-shadow:0 0 0 3px oklch(0.66 0.10 133 / .16); }
+  .field .hint{ font-size:.76rem; color:var(--ink-faint); margin-top:.35rem; }
+  .savebtn{
+    appearance:none; border:none; cursor:pointer; font-family:inherit; font-weight:600; font-size:1rem;
+    color:var(--paper); padding:.85em 2em; border-radius:999px; margin-top:.4rem;
+    background:linear-gradient(180deg,var(--sage-deep),var(--sage-edge));
+    box-shadow:0 16px 30px -16px var(--sage-edge); transition:transform .2s var(--ease), filter .2s var(--ease);
+  }
+  .savebtn:hover{ transform:translateY(-1px); filter:brightness(1.04); }
+  .savebtn:disabled{ opacity:.7; cursor:default; transform:none; }
+
+  /* ---------- settings controls ---------- */
+  .subhead{ font-family:"Fraunces",serif; font-weight:440; font-size:1.2rem; color:var(--ink); margin:1.8rem 0 .9rem; }
+  .linkbtn{
+    appearance:none; background:none; border:none; cursor:pointer; font-family:inherit;
+    font-size:.74rem; font-weight:600; color:var(--sage-edge); padding:0; margin-left:.6em;
+    text-transform:none; letter-spacing:0;
+  }
+  .linkbtn:hover{ text-decoration:underline; }
+  textarea{
+    width:100%; font-family:inherit; font-size:.95rem; line-height:1.5; color:var(--ink);
+    padding:.85em 1em; border-radius:.85rem; border:1px solid var(--line); resize:vertical;
+    background:oklch(0.99 0.01 120 / .7); transition:border-color .2s var(--ease), box-shadow .2s var(--ease);
+  }
+  textarea:focus{ outline:none; border-color:var(--sage-deep); box-shadow:0 0 0 3px oklch(0.66 0.10 133 / .16); }
+
+  .switchrow{ display:flex; align-items:center; gap:1rem; padding:.9rem 0; }
+  .switchrow .switchlabel{ font-weight:600; color:var(--ink); }
+  .switchrow .switchsub{ font-size:.8rem; color:var(--ink-faint); margin-top:.15rem; max-width:40ch; }
+  .switch{
+    appearance:none; border:none; cursor:pointer; flex:none; margin-left:auto;
+    width:3.1rem; height:1.75rem; border-radius:999px; background:oklch(0.78 0.02 120);
+    position:relative; transition:background .25s var(--ease);
+  }
+  .switch .knob{
+    position:absolute; top:.2rem; left:.2rem; width:1.35rem; height:1.35rem; border-radius:50%;
+    background:var(--paper); box-shadow:0 2px 6px oklch(0.4 0.05 130 / .35);
+    transition:transform .25s var(--ease);
+  }
+  .switch[aria-checked="true"]{ background:var(--sage-deep); }
+  .switch[aria-checked="true"] .knob{ transform:translateX(1.35rem); }
+
+  /* segmented backend chooser */
+  .segmented{ display:flex; gap:.5rem; margin-bottom:1.1rem; }
+  .seg{
+    flex:1; appearance:none; cursor:pointer; font-family:inherit; text-align:left;
+    padding:.85rem 1rem; border-radius:1rem; border:1px solid var(--line);
+    background:oklch(0.99 0.01 120 / .5); transition:border-color .2s var(--ease), background .2s var(--ease);
+  }
+  .seg .segt{ font-weight:600; color:var(--ink); display:block; }
+  .seg .segd{ font-size:.78rem; color:var(--ink-faint); margin-top:.15rem; }
+  .seg[aria-pressed="true"]{ border-color:var(--sage-deep); background:oklch(0.80 0.075 130 / .14); }
+
+  .chips{ display:flex; flex-wrap:wrap; gap:.5rem; margin:.2rem 0 .8rem; }
+  .chip{
+    appearance:none; cursor:pointer; font-family:inherit; font-size:.84rem; color:var(--ink-soft);
+    padding:.4em .9em; border-radius:999px; border:1px solid var(--line); background:oklch(0.99 0.01 120 / .6);
+    transition:border-color .2s, background .2s, color .2s;
+  }
+  .chip:hover{ border-color:var(--sage-deep); color:var(--ink); }
+  .chip.active{ background:var(--sage-deep); color:var(--paper); border-color:var(--sage-deep); }
+
+  .warn{
+    display:flex; gap:.6em; align-items:flex-start; margin:.4rem 0 1rem; padding:.75em .9em;
+    border-radius:.8rem; background:oklch(0.60 0.12 38 / .09); color:oklch(0.46 0.10 40);
+    font-size:.83rem; line-height:1.45;
+  }
+  .teststatus{ font-size:.84rem; margin-top:.6rem; min-height:1.2em; }
+  .teststatus.ok{ color:var(--sage-edge); }
+  .teststatus.err{ color:var(--clay); }
+  .ghostbtn{
+    appearance:none; cursor:pointer; font-family:inherit; font-size:.86rem; font-weight:600; color:var(--ink-soft);
+    padding:.6em 1.1em; border-radius:999px; border:1px solid var(--line); background:oklch(0.99 0.01 120 / .6);
+    transition:background .2s, transform .15s;
+  }
+  .ghostbtn:hover{ background:oklch(0.97 0.02 120); transform:translateY(-1px); }
+
+  @media (prefers-reduced-motion: reduce){
+    .breath, .orb::before, .ring{ animation:none !important; }
+    .cluster{ transition:none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- LANDING -->
+  <section class="view" id="landing">
+    <div class="wordmark">{{ASSISTANT_NAME}}</div>
+    <p class="tagline">A voice you can just <em>talk</em> to. She listens while you hold a key, remembers what matters — and keeps it all on your device.</p>
+    <button class="begin" id="beginBtn">Start conversation</button>
+    <p class="hint">Hold <kbd>Space</kbd> to talk · everything stays local</p>
+    <nav class="landingnav">
+      <button data-view="profile">Profile</button><span>·</span>
+      <button data-view="chats">Past chats</button><span>·</span>
+      <button data-view="memories">Memories</button><span>·</span>
+      <button data-view="files">Reference files</button><span>·</span>
+      <button data-view="settings">Settings</button>
+    </nav>
+  </section>
+
+  <!-- CALL -->
+  <section class="view" id="call" hidden>
+    <div class="topbar">
+      <div class="name">{{ASSISTANT_NAME}} <span class="timer" id="timer">00:00</span></div>
+      <div class="byline">connected</div>
+    </div>
+
+    <div class="orbwrap" id="orbStage">
+      <div class="cluster">
+        <div class="halo"></div>
+        <div class="breath">
+          <div class="ring"></div><div class="ring"></div><div class="ring"></div>
+          <div class="orb"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1.1rem;width:100%;">
+      <div class="statuslabel" id="status">tap and hold space</div>
+      <p class="caption" id="caption"></p>
+      <div class="controls">
+        <button class="ptt" id="pttBtn"><span class="dot"></span><span id="pttLabel">Hold to talk</span></button>
+        <button class="end" id="endBtn"><span class="sq"></span>End call</button>
+      </div>
+    </div>
+    <div class="memflash" id="memflash">✦ <span>committed to memory</span></div>
+  </section>
+
+  <!-- MODEL SETUP (onboarding step 2) -->
+  <section class="view panel" id="modelsetup" hidden>
+    <header class="panelhead"><button class="back" data-back>←</button><h2>Choose your model</h2></header>
+    <div class="panelbody">
+      <p class="panelsub">{{ASSISTANT_NAME}} can run on a local model — private and free — or on any OpenAI-compatible API.</p>
+      <div id="onbModel"></div>
+      <button class="savebtn" id="modelsetupSave">Start talking</button>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="view panel" id="settings" hidden>
+    <header class="panelhead"><button class="back" data-back>←</button><h2>Settings</h2></header>
+    <div class="panelbody">
+      <div class="field"><label>Assistant name</label><input id="set_name" autocomplete="off" spellcheck="false"></div>
+      <div class="switchrow">
+        <div>
+          <div class="switchlabel">Thinking</div>
+          <div class="switchsub">Let reasoning models think before answering. Off is noticeably faster for voice.</div>
+        </div>
+        <button class="switch" id="set_thinking" role="switch" aria-checked="false"><span class="knob"></span></button>
+      </div>
+      <div class="field">
+        <label>System prompt<button class="linkbtn" id="set_resetPrompt">reset to default</button></label>
+        <textarea id="set_persona" rows="6"></textarea>
+        <div class="hint">Memory instructions are always added automatically, so memory keeps working no matter what you write here.</div>
+      </div>
+      <h3 class="subhead">Model</h3>
+      <div id="setModel"></div>
+      <button class="savebtn" id="settingsSave">Save settings</button>
+    </div>
+  </section>
+
+  <!-- PROFILE -->
+  <section class="view panel" id="profile" hidden>
+    <header class="panelhead"><button class="back" data-back>←</button><h2 id="profileTitle">Your profile</h2></header>
+    <div class="panelbody">
+      <p class="panelsub" id="profileSub">Basic details {{ASSISTANT_NAME}} remembers across every conversation.</p>
+      <div class="localnote">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <span>Everything here stays on this device — nothing is ever uploaded.</span>
+      </div>
+      <div class="field"><label>Name</label><input id="pf_name" placeholder="e.g. Alex Morgan" autocomplete="off" spellcheck="false"></div>
+      <div class="field"><label>Preferred name</label><input id="pf_preferred_name" placeholder="What should {{ASSISTANT_NAME}} call you?" autocomplete="off" spellcheck="false"></div>
+      <div class="field"><label>Location</label><input id="pf_location" placeholder="e.g. Austin, Texas" autocomplete="off" spellcheck="false"></div>
+      <div class="field"><label>Gender</label><input id="pf_gender" placeholder="e.g. man, woman, non-binary…" autocomplete="off" spellcheck="false"><div class="hint">Optional — helps {{ASSISTANT_NAME}} refer to you correctly.</div></div>
+      <button class="savebtn" id="profileSave">Save profile</button>
+    </div>
+  </section>
+
+  <!-- PAST CHATS -->
+  <section class="view panel" id="chats" hidden>
+    <header class="panelhead"><button class="back" data-back>←</button><h2>Past chats</h2></header>
+    <div class="panelbody" id="chatsBody"></div>
+  </section>
+
+  <!-- CHAT DETAIL -->
+  <section class="view panel" id="chatDetail" hidden>
+    <header class="panelhead"><button class="back" data-view="chats">←</button><h2 id="chatDetailTitle">Conversation</h2></header>
+    <div class="panelbody" id="chatDetailBody"></div>
+  </section>
+
+  <!-- MEMORIES -->
+  <section class="view panel" id="memories" hidden>
+    <header class="panelhead"><button class="back" data-back>←</button><h2>Memories</h2></header>
+    <div class="panelbody" id="memoriesBody"></div>
+  </section>
+
+  <!-- REFERENCE FILES -->
+  <section class="view panel" id="files" hidden>
+    <header class="panelhead"><button class="back" data-back>←</button><h2>Reference files</h2></header>
+    <div class="panelbody">
+      <label class="uploadbtn">
+        <input type="file" id="fileInput" accept=".pdf,.docx,.txt,.md,.csv,.json" hidden>
+        <span id="uploadLabel">+ Add a file</span>
+      </label>
+      <p class="paneltip">Upload a resume, candidate profile, or notes. {{ASSISTANT_NAME}} reads the text and references it when you ask — “what’s on my resume?”, “tailor this to a backend role”, and so on.</p>
+      <div id="docList"></div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+const $ = (s)=>document.querySelector(s);
+const ASSISTANT_NAME = "{{ASSISTANT_NAME}}";
+const landing=$("#landing"), call=$("#call");
+const statusEl=$("#status"), captionEl=$("#caption"), timerEl=$("#timer");
+const pttBtn=$("#pttBtn"), pttLabel=$("#pttLabel"), endBtn=$("#endBtn"), memflash=$("#memflash");
+const orbStage=$("#orbStage");
+
+let ac, micStream, micSource, micAnalyser, capNode;
+let playAnalyser=null, currentSource=null;
+let captured=[];          // Float32 chunks while holding
+let holding=false, busy=false, started=false;
+let state="idle";         // idle | listening | thinking | speaking
+let lastMemCount=null, callStart=0, timerInt=null;
+
+function setState(s){
+  state=s;
+  orbStage.classList.remove("state-listening","state-thinking","state-speaking");
+  if(s!=="idle") orbStage.classList.add("state-"+s);
+  const labels={ idle:"hold space to talk", listening:"listening…", thinking:"thinking…", speaking:"speaking" };
+  statusEl.textContent=labels[s]||"";
+}
+function showCaption(text, who){
+  captionEl.className="caption"+(who==="user"?" user":"");
+  captionEl.innerHTML = who==="user" ? `“${text}”` : `<span class="lead"></span>${text}`;
+  requestAnimationFrame(()=>captionEl.classList.add("show"));
+}
+function hideCaption(){ captionEl.classList.remove("show"); }
+
+/* ---------- start / end ---------- */
+async function start(){
+  if(started) return;
+  ac = new (window.AudioContext||window.webkitAudioContext)();
+  try{
+    micStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  }catch(e){ alert("Microphone access is needed to talk. Please allow it and reload."); return; }
+  micSource = ac.createMediaStreamSource(micStream);
+  micAnalyser = ac.createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=.75;
+  micSource.connect(micAnalyser);
+
+  // capture node (collects samples only while holding)
+  capNode = ac.createScriptProcessor(4096,1,1);
+  capNode.onaudioprocess = (e)=>{ if(holding) captured.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  micSource.connect(capNode); capNode.connect(ac.destination); // destination keeps node alive (we mute via 0 output)
+
+  started=true;
+  await fetch("/reset",{method:"POST"});
+  showView("call");
+  callStart=Date.now(); timerInt=setInterval(tickTimer,1000); tickTimer();
+  setState("idle"); levelLoop();
+}
+function tickTimer(){
+  const s=Math.floor((Date.now()-callStart)/1000);
+  timerEl.textContent=`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+}
+function end(){
+  if(currentSource){ try{currentSource.stop();}catch(_){} }
+  if(micStream) micStream.getTracks().forEach(t=>t.stop());
+  if(ac) ac.close();
+  clearInterval(timerInt);
+  started=false; holding=false; busy=false;
+  fetch("/end",{method:"POST"}).catch(()=>{});
+  showView("landing");
+}
+
+/* ---------- view navigation ---------- */
+const VIEWS=["landing","call","chats","chatDetail","memories","files","profile","settings","modelsetup"];
+function showView(id){
+  VIEWS.forEach(v=>{ const el=document.getElementById(v); if(el) el.hidden=(v!==id); });
+}
+function openView(v){
+  showView(v);
+  if(v==="chats") loadChats();
+  else if(v==="memories") loadMemories();
+  else if(v==="files") loadFiles();
+  else if(v==="profile") loadProfile(false);
+  else if(v==="settings") loadSettings();
+}
+
+/* ---------- profile ---------- */
+const PF=["name","preferred_name","location","gender"];
+async function loadProfile(onboarding){
+  let d={profile:{},onboarded:false};
+  try{ d=await (await fetch("/profile")).json(); }catch(_){}
+  PF.forEach(k=>{ const el=document.getElementById("pf_"+k); if(el) el.value=d.profile[k]||""; });
+  $("#profileTitle").textContent = onboarding ? "Welcome" : "Your profile";
+  $("#profileSub").textContent = onboarding
+    ? `Tell ${ASSISTANT_NAME} a little about you so she can greet you properly. You can change this anytime.`
+    : `Basic details ${ASSISTANT_NAME} remembers across every conversation.`;
+  $("#profileSave").textContent = onboarding ? "Save & start" : "Save profile";
+}
+async function saveProfile(){
+  const body={}; PF.forEach(k=> body[k]=document.getElementById("pf_"+k).value.trim());
+  const btn=$("#profileSave"); btn.disabled=true; btn.textContent="Saved ✓";
+  try{ await fetch("/profile",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); }catch(_){}
+  setTimeout(()=>{
+    btn.disabled=false; btn.textContent = pfOnboarding ? "Save & start" : "Save profile";
+    // Saving always lands on the start-conversation page. The onboarded flag is
+    // now set, so init() won't show this again on future visits.
+    showView("landing");
+  }, 450);
+}
+
+/* ---------- reusable model config (used in Settings + onboarding) ---------- */
+const OLLAMA_SUGGESTIONS=["qwen3.5:4b","gemma3n:e2b","llama3.2:3b"];
+function modelConfigHTML(p){
+  return `
+  <div class="segmented">
+    <button class="seg" id="${p}_segOllama" aria-pressed="true">
+      <span class="segt">Quick · Local</span><span class="segd">Ollama on your machine — private, free</span>
+    </button>
+    <button class="seg" id="${p}_segOpenai" aria-pressed="false">
+      <span class="segt">Advanced · API</span><span class="segd">Any OpenAI-compatible endpoint</span>
+    </button>
+  </div>
+  <div id="${p}_quick">
+    <div class="field"><label>Ollama address</label><input id="${p}_ollama_url" autocomplete="off" spellcheck="false" placeholder="http://localhost:11434"></div>
+    <div class="field">
+      <label>Model <button class="linkbtn" id="${p}_listBtn">list installed</button></label>
+      <div class="chips" id="${p}_chips"></div>
+      <input id="${p}_ollama_model" autocomplete="off" spellcheck="false" placeholder="or paste any name, e.g. nemotron-mini, gemma3n:e2b">
+    </div>
+  </div>
+  <div id="${p}_adv" hidden>
+    <div class="field"><label>API endpoint</label><input id="${p}_openai_base" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1  ·  or  http://localhost:8080/v1"></div>
+    <div class="field"><label>API key</label><input id="${p}_openai_key" type="password" autocomplete="off" placeholder="sk-…  (leave blank for keyless local servers)">
+      <div class="hint">🔒 Stored in your system keychain, never written to disk.</div></div>
+    <div class="field"><label>Model</label><input id="${p}_openai_model" autocomplete="off" spellcheck="false" placeholder="e.g. gpt-4o-mini, llama-3.1-8b-instruct"></div>
+    <div class="warn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>Large cloud models — especially with thinking on — can take 10–30 seconds or more to reply. Local models feel instant.</span>
+    </div>
+  </div>
+  <button class="ghostbtn" id="${p}_test">Test connection</button>
+  <div class="teststatus" id="${p}_teststatus"></div>`;
+}
+function segSelect(p, backend){
+  const ol=backend!=="openai";
+  document.getElementById(p+"_segOllama").setAttribute("aria-pressed", ol);
+  document.getElementById(p+"_segOpenai").setAttribute("aria-pressed", !ol);
+  document.getElementById(p+"_quick").hidden=!ol;
+  document.getElementById(p+"_adv").hidden=ol;
+}
+function wireModelConfig(p){
+  document.getElementById(p+"_segOllama").addEventListener("click",()=>segSelect(p,"ollama"));
+  document.getElementById(p+"_segOpenai").addEventListener("click",()=>segSelect(p,"openai"));
+  // suggestion chips
+  const chips=document.getElementById(p+"_chips");
+  chips.innerHTML="";
+  OLLAMA_SUGGESTIONS.forEach(m=>{
+    const c=document.createElement("button"); c.className="chip"; c.textContent=m;
+    c.addEventListener("click",()=>{ document.getElementById(p+"_ollama_model").value=m; markChips(p,m); });
+    chips.appendChild(c);
+  });
+  document.getElementById(p+"_listBtn").addEventListener("click",async()=>{
+    const url=document.getElementById(p+"_ollama_url").value.trim();
+    const btn=document.getElementById(p+"_listBtn"); btn.textContent="loading…";
+    try{
+      const d=await (await fetch("/ollama/models"+(url?("?url="+encodeURIComponent(url)):""))).json();
+      chips.innerHTML="";
+      (d.models||[]).forEach(m=>{
+        const c=document.createElement("button"); c.className="chip"; c.textContent=m;
+        c.addEventListener("click",()=>{ document.getElementById(p+"_ollama_model").value=m; markChips(p,m); });
+        chips.appendChild(c);
+      });
+      if(!(d.models||[]).length){ chips.innerHTML='<span class="hint">none found — is Ollama running?</span>'; }
+    }catch(_){}
+    btn.textContent="list installed";
+  });
+  document.getElementById(p+"_ollama_model").addEventListener("input",()=>markChips(p,document.getElementById(p+"_ollama_model").value));
+  document.getElementById(p+"_test").addEventListener("click",()=>testModel(p));
+}
+function markChips(p,val){
+  document.querySelectorAll("#"+p+"_chips .chip").forEach(c=>c.classList.toggle("active",c.textContent===val));
+}
+function fillModelConfig(p,s){
+  document.getElementById(p+"_ollama_url").value=s.ollama_url||"";
+  document.getElementById(p+"_ollama_model").value=s.ollama_model||"";
+  document.getElementById(p+"_openai_base").value=s.openai_base||"";
+  document.getElementById(p+"_openai_model").value=s.openai_model||"";
+  const key=document.getElementById(p+"_openai_key");
+  if(s.has_api_key){ key.placeholder="•••••••• saved in keychain (leave blank to keep)"; }
+  segSelect(p, s.backend||"ollama");
+  markChips(p, s.ollama_model||"");
+}
+function collectModelConfig(p){
+  const ol=document.getElementById(p+"_segOllama").getAttribute("aria-pressed")==="true";
+  const out={ backend: ol?"ollama":"openai",
+    ollama_url:document.getElementById(p+"_ollama_url").value.trim(),
+    ollama_model:document.getElementById(p+"_ollama_model").value.trim(),
+    openai_base:document.getElementById(p+"_openai_base").value.trim(),
+    openai_model:document.getElementById(p+"_openai_model").value.trim() };
+  const key=document.getElementById(p+"_openai_key").value;
+  if(key) out.api_key=key;            // only send if user typed one
+  return out;
+}
+async function testModel(p){
+  const st=document.getElementById(p+"_teststatus"); st.className="teststatus"; st.textContent="Testing…";
+  try{
+    const d=await (await fetch("/settings/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collectModelConfig(p))})).json();
+    if(d.ok){ st.className="teststatus ok"; st.textContent="✓ Connected — model replied."; }
+    else { st.className="teststatus err"; st.textContent="✕ "+(d.error||"Couldn’t connect."); }
+  }catch(e){ st.className="teststatus err"; st.textContent="✕ "+e; }
+}
+
+/* ---------- settings ---------- */
+let _settingsCache={};
+async function loadSettings(){
+  let s={}; try{ s=await (await fetch("/settings")).json(); }catch(_){}
+  _settingsCache=s;
+  $("#set_name").value=s.assistant_name||"";
+  $("#set_persona").value=s.persona||"";
+  setSwitch($("#set_thinking"), !!s.thinking);
+  $("#setModel").innerHTML=modelConfigHTML("set");
+  wireModelConfig("set"); fillModelConfig("set", s);
+}
+function setSwitch(el,on){ el.setAttribute("aria-checked", on?"true":"false"); }
+async function saveSettings(){
+  const body=Object.assign({
+    assistant_name:$("#set_name").value.trim(),
+    persona:$("#set_persona").value,
+    thinking:$("#set_thinking").getAttribute("aria-checked")==="true",
+  }, collectModelConfig("set"));
+  const btn=$("#settingsSave"); btn.disabled=true; btn.textContent="Saved ✓";
+  try{ await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); }catch(_){}
+  setTimeout(()=>{ btn.disabled=false; btn.textContent="Save settings"; location.reload(); }, 500);
+}
+
+/* ---------- onboarding model step ---------- */
+function openModelSetup(){
+  showView("modelsetup");
+  $("#onbModel").innerHTML=modelConfigHTML("onb");
+  wireModelConfig("onb");
+  fillModelConfig("onb", _settingsCache.backend ? _settingsCache : (window._defaults||{backend:"ollama"}));
+  fetch("/settings").then(r=>r.json()).then(s=>{ _settingsCache=s; fillModelConfig("onb", s); }).catch(()=>{});
+}
+async function saveModelSetup(){
+  const body=Object.assign({configured:true}, collectModelConfig("onb"));
+  const btn=$("#modelsetupSave"); btn.disabled=true; btn.textContent="Saved ✓";
+  try{ await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); }catch(_){}
+  setTimeout(()=>{ btn.disabled=false; btn.textContent="Start talking"; showView("landing"); }, 450);
+}
+function fmtDate(ts){
+  const d=new Date(ts*1000);
+  return d.toLocaleDateString(undefined,{month:"short",day:"numeric"})+" · "+
+         d.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+}
+
+async function loadChats(){
+  const body=document.getElementById("chatsBody");
+  body.innerHTML='<p class="empty">Loading…</p>';
+  let list=[]; try{ list=(await (await fetch("/sessions")).json()).sessions||[]; }catch(_){}
+  if(!list.length){ body.innerHTML='<div class="empty"><span class="big">No conversations yet</span>Start a call — your past chats will be saved here.</div>'; return; }
+  body.innerHTML="";
+  list.forEach(s=>{
+    const row=document.createElement("div"); row.className="row clickable";
+    row.innerHTML='<div class="grow"><div class="title"></div><div class="sub"></div></div><button class="x" title="Delete">✕</button>';
+    row.querySelector(".title").textContent=s.title;
+    row.querySelector(".sub").textContent=`${fmtDate(s.started_at)} · ${Math.floor(s.turns/2)} exchange${Math.floor(s.turns/2)===1?"":"s"}`;
+    row.querySelector(".grow").addEventListener("click",()=>openChat(s.id,s.title));
+    row.querySelector(".x").addEventListener("click",async(e)=>{
+      e.stopPropagation();
+      await fetch("/session/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:s.id})});
+      loadChats();
+    });
+    body.appendChild(row);
+  });
+}
+async function openChat(id,title){
+  showView("chatDetail");
+  document.getElementById("chatDetailTitle").textContent=title;
+  const body=document.getElementById("chatDetailBody");
+  body.innerHTML='<p class="empty">Loading…</p>';
+  let s={}; try{ s=await (await fetch("/session?id="+encodeURIComponent(id))).json(); }catch(_){}
+  body.innerHTML="";
+  (s.turns||[]).forEach(t=>{
+    const b=document.createElement("div"); b.className="bubble "+(t.role==="user"?"user":"assistant");
+    b.textContent=t.content; body.appendChild(b);
+  });
+}
+
+async function loadMemories(){
+  const body=document.getElementById("memoriesBody");
+  body.innerHTML='<p class="empty">Loading…</p>';
+  let list=[]; try{ list=(await (await fetch("/memories")).json()).memories||[]; }catch(_){}
+  if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">Nothing remembered yet</span>Tell ${ASSISTANT_NAME} durable facts about you and they’ll appear here.</div>`; return; }
+  body.innerHTML="";
+  list.forEach(m=>{
+    const row=document.createElement("div"); row.className="row memitem";
+    row.innerHTML='<div class="grow"><div class="title"></div></div><button class="x" title="Forget">✕</button>';
+    row.querySelector(".title").textContent=m.text;
+    row.querySelector(".x").addEventListener("click",async()=>{
+      await fetch("/memory/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:m.id})});
+      loadMemories();
+    });
+    body.appendChild(row);
+  });
+}
+
+async function loadFiles(){
+  const body=document.getElementById("docList");
+  body.innerHTML="";
+  let list=[]; try{ list=(await (await fetch("/documents")).json()).documents||[]; }catch(_){}
+  if(!list.length){ body.innerHTML=`<div class="empty" style="padding:2rem 1rem;"><span class="big">No files yet</span>Add a resume or profile to give ${ASSISTANT_NAME} context.</div>`; return; }
+  list.forEach(doc=>{
+    const row=document.createElement("div"); row.className="row";
+    row.innerHTML='<div class="grow"><div class="title"></div><div class="sub"></div></div><button class="x" title="Remove">✕</button>';
+    row.querySelector(".title").textContent=doc.name;
+    row.querySelector(".sub").textContent=`${(doc.chars/1000).toFixed(1)}k characters · referenced in conversation`;
+    row.querySelector(".x").addEventListener("click",async()=>{
+      await fetch("/document/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:doc.id})});
+      loadFiles();
+    });
+    body.appendChild(row);
+  });
+}
+
+/* ---------- push to talk ---------- */
+function beginTalk(){
+  if(!started || holding || busy) return;
+  // barge-in: stop any current playback
+  if(currentSource){ try{currentSource.stop();}catch(_){} currentSource=null; }
+  holding=true; captured=[]; hideCaption();
+  pttBtn.classList.add("active"); pttLabel.textContent="Listening…";
+  setState("listening");
+  if(ac.state==="suspended") ac.resume();
+}
+async function endTalk(){
+  if(!holding) return;
+  holding=false;
+  pttBtn.classList.remove("active"); pttLabel.textContent="Hold to talk";
+  const wav = encodeWAV(flatten(captured), ac.sampleRate, 16000);
+  captured=[];
+  if(wav.byteLength < 4000){ setState("idle"); return; } // too short
+  busy=true; pttBtn.disabled=true; setState("thinking");
+  try{
+    const r = await fetch("/turn",{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:wav});
+    const data = await r.json();
+    if(!data.ok){ setState("idle"); showCaption("Something went wrong.","user"); return; }
+    if(data.empty){ setState("idle"); showCaption("Didn’t catch that — try again.","user"); return; }
+    showCaption(data.transcript,"user");
+    flashMemory(data.memories);
+    if(data.audio){ await speak(data.audio, data.reply); }
+    else { setState("idle"); }
+  }catch(e){ setState("idle"); showCaption("Connection lost.","user"); }
+  finally{ busy=false; pttBtn.disabled=false; }
+}
+
+/* ---------- playback ---------- */
+async function speak(b64, replyText){
+  const bytes = Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
+  const buf = await ac.decodeAudioData(bytes.buffer);
+  playAnalyser = ac.createAnalyser(); playAnalyser.fftSize=1024; playAnalyser.smoothingTimeConstant=.8;
+  const src = ac.createBufferSource(); src.buffer=buf;
+  src.connect(playAnalyser); playAnalyser.connect(ac.destination);
+  currentSource=src;
+  setState("speaking"); showCaption(replyText,"bot");
+  await new Promise((res)=>{ src.onended=res; src.start(); });
+  if(currentSource===src){ currentSource=null; playAnalyser=null; setState("idle"); }
+}
+
+/* ---------- audio-reactive orb ---------- */
+function levelLoop(){
+  if(!started) return;
+  let lvl=0;
+  const an = state==="speaking" ? playAnalyser : (state==="listening" ? micAnalyser : null);
+  if(an){
+    const buf=new Uint8Array(an.fftSize); an.getByteTimeDomainData(buf);
+    let sum=0; for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum+=v*v; }
+    const rms=Math.sqrt(sum/buf.length);
+    lvl=Math.min(1, rms*3.2);
+  }
+  // smooth
+  const prev=parseFloat(document.documentElement.style.getPropertyValue("--level"))||0;
+  const next=prev + (lvl-prev)*0.25;
+  document.documentElement.style.setProperty("--level", next.toFixed(3));
+  requestAnimationFrame(levelLoop);
+}
+
+/* ---------- memory flash ---------- */
+function flashMemory(memories){
+  if(!Array.isArray(memories)) return;
+  if(lastMemCount!==null && memories.length>lastMemCount){
+    memflash.classList.add("show");
+    setTimeout(()=>memflash.classList.remove("show"), 2200);
+  }
+  lastMemCount=memories.length;
+}
+
+/* ---------- WAV helpers ---------- */
+function flatten(chunks){
+  let len=0; for(const c of chunks) len+=c.length;
+  const out=new Float32Array(len); let o=0;
+  for(const c of chunks){ out.set(c,o); o+=c.length; }
+  return out;
+}
+function downsample(buf, inRate, outRate){
+  if(outRate>=inRate) return buf;
+  const ratio=inRate/outRate, outLen=Math.floor(buf.length/ratio);
+  const out=new Float32Array(outLen);
+  for(let i=0;i<outLen;i++){
+    const start=Math.floor(i*ratio), end=Math.floor((i+1)*ratio);
+    let s=0,n=0; for(let j=start;j<end&&j<buf.length;j++){ s+=buf[j]; n++; }
+    out[i]= n? s/n : 0;
+  }
+  return out;
+}
+function encodeWAV(samples, inRate, outRate){
+  const data=downsample(samples,inRate,outRate);
+  const buf=new ArrayBuffer(44+data.length*2), view=new DataView(buf);
+  const w=(off,str)=>{ for(let i=0;i<str.length;i++) view.setUint8(off+i,str.charCodeAt(i)); };
+  w(0,"RIFF"); view.setUint32(4,36+data.length*2,true); w(8,"WAVE");
+  w(12,"fmt "); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,1,true);
+  view.setUint32(24,outRate,true); view.setUint32(28,outRate*2,true); view.setUint16(32,2,true); view.setUint16(34,16,true);
+  w(36,"data"); view.setUint32(40,data.length*2,true);
+  let off=44; for(let i=0;i<data.length;i++,off+=2){ const s=Math.max(-1,Math.min(1,data[i])); view.setInt16(off, s<0?s*0x8000:s*0x7fff, true); }
+  return buf;
+}
+
+/* ---------- events ---------- */
+$("#beginBtn").addEventListener("click", start);
+endBtn.addEventListener("click", end);
+
+// secondary view navigation
+document.querySelectorAll("[data-view]").forEach(b=>b.addEventListener("click",()=>openView(b.dataset.view)));
+document.querySelectorAll("[data-back]").forEach(b=>b.addEventListener("click",()=>showView("landing")));
+$("#profileSave").addEventListener("click", saveProfile);
+$("#settingsSave").addEventListener("click", saveSettings);
+$("#modelsetupSave").addEventListener("click", saveModelSetup);
+$("#set_thinking").addEventListener("click", (e)=>{
+  const on=e.currentTarget.getAttribute("aria-checked")==="true";
+  setSwitch(e.currentTarget, !on);
+});
+$("#set_resetPrompt").addEventListener("click",(e)=>{
+  e.preventDefault();
+  if(_settingsCache.persona_default!=null) $("#set_persona").value=_settingsCache.persona_default;
+});
+
+// first run: if no profile yet, walk through onboarding (profile → model)
+(async function init(){
+  let d={onboarded:true};
+  try{ d=await (await fetch("/profile")).json(); }catch(_){}
+  if(!d.onboarded){ showView("profile"); loadProfile(true); }
+})();
+
+// file upload
+const fileInput=$("#fileInput"), uploadLabel=$("#uploadLabel");
+fileInput.addEventListener("change", async (e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  uploadLabel.textContent="Reading…";
+  try{
+    const buf=await f.arrayBuffer();
+    const r=await fetch("/upload",{method:"POST",
+      headers:{"X-Filename":encodeURIComponent(f.name),"Content-Type":"application/octet-stream"},body:buf});
+    const d=await r.json();
+    if(!d.ok){ uploadLabel.textContent="+ Add a file"; alert(d.error||"Couldn’t read that file."); }
+    else { uploadLabel.textContent="+ Add a file"; }
+  }catch(err){ uploadLabel.textContent="+ Add a file"; alert("Upload failed."); }
+  e.target.value=""; loadFiles();
+});
+
+// spacebar push-to-talk
+window.addEventListener("keydown",(e)=>{
+  if(e.code==="Space" && !e.repeat && started){ e.preventDefault(); beginTalk(); }
+});
+window.addEventListener("keyup",(e)=>{
+  if(e.code==="Space" && started){ e.preventDefault(); endTalk(); }
+});
+// pointer push-to-talk (mouse / touch)
+const down=(e)=>{ e.preventDefault(); beginTalk(); };
+const up=(e)=>{ e.preventDefault(); endTalk(); };
+pttBtn.addEventListener("pointerdown",down);
+pttBtn.addEventListener("pointerup",up);
+pttBtn.addEventListener("pointerleave",(e)=>{ if(holding) endTalk(); });
+</script>
+</body>
+</html>
