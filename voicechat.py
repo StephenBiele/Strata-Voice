@@ -18,6 +18,7 @@ Run:  python voicechat.py
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import re
@@ -43,11 +44,17 @@ TTS_SR = 24000   # Kokoro output rate
 
 # The editable persona (exposed in Settings). Keep it about voice + tone.
 PERSONA_PROMPT = """You are a warm, concise voice assistant. Keep replies short \
-and natural — one or two sentences, since they will be spoken aloud. Do not use \
-markdown, lists, or emoji.
+and natural: usually one or two sentences, since they are spoken aloud. Do not \
+use markdown, lists, or emoji. Write the way people actually speak: short, plain \
+sentences with simple punctuation. Avoid dashes, semicolons, and long chains of \
+commas — they make the spoken voice sound choppy.
 
-You have a persistent memory about the user. Use it naturally; never read it back \
-as a list unless asked."""
+You know some things about the user — their profile and remembered facts are \
+provided below. When the user asks about something you know (their name, where \
+they live, a preference, anything in memory), answer directly and plainly from \
+it — never refuse to recall it or tease about "not reciting." Otherwise, draw on \
+what you know only when it is genuinely relevant to what they just said. Do not \
+shoehorn their name or location into replies where they don't naturally belong."""
 
 # Fixed instructions that make the memory feature work. Always appended after the
 # (possibly user-edited) persona, so memory keeps working no matter what the user
@@ -61,8 +68,21 @@ family, pets, preferences, allergies), append:  [MEM_ADD] <short fact>
 Only emit a directive for genuinely durable facts or explicit forget requests. \
 Never emit one for small talk, questions, or transient events."""
 
+# Always appended (not user-editable). Guarantees the model actually USES the
+# profile + memories, regardless of the persona the user sets. Without this, a
+# character-heavy persona (e.g. one that plays up fallibility) can make the model
+# roleplay not-knowing the user even though the facts are right there in context.
+RECALL_GUARD = """USING WHAT YOU KNOW: The user profile and current memories above \
+are real, verified facts about this specific user that you genuinely have — not \
+guesses or roleplay. When the user asks what you know about them, or asks anything \
+the profile or memories cover (their name, where they live, their job, their pets, \
+preferences, anything listed), answer directly and confidently from that \
+information. Never claim you don't know them, can't remember, or might be \
+misremembering something that is listed above — it is correct, so do not deny, \
+hedge, or downplay it. Weave it in naturally instead of reciting a list."""
+
 # Backwards-compatible default (persona + directives) for the CLI path.
-SYSTEM_PROMPT = PERSONA_PROMPT + "\n\n" + MEMORY_DIRECTIVES
+SYSTEM_PROMPT = PERSONA_PROMPT + "\n\n" + MEMORY_DIRECTIVES + "\n\n" + RECALL_GUARD
 
 _THINK_TAG = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
@@ -99,6 +119,37 @@ def play(audio: np.ndarray, sr: int) -> None:
     sd.wait()
 
 
+def patch_kokoro_tts() -> None:
+    """Work around an mlx-audio Kokoro bug.
+
+    In `SineGen.__call__`, `_f02sine` and `_f02uv` can return frame counts that
+    differ by a few hundred samples, so `noise_amp * normal(sine_waves.shape)`
+    fails to broadcast and the whole synthesis raises. This trips on plenty of
+    ordinary sentences (not just long ones). We re-bind the method to a version
+    that trims both to the shorter length (the f0-derived `uv` length is the
+    correct target) before combining.
+    """
+    try:
+        import mlx.core as mx
+        from mlx_audio.tts.models.kokoro import istftnet
+
+        def _sinegen_call(self, f0):
+            fn = f0 * mx.arange(1, self.harmonic_num + 2)[None, None, :]
+            sine_waves = self._f02sine(fn) * self.sine_amp
+            uv = self._f02uv(f0)
+            n = min(sine_waves.shape[1], uv.shape[1])
+            sine_waves, uv = sine_waves[:, :n, :], uv[:, :n, :]
+            noise_amp = uv * self.noise_std + (1 - uv) * self.sine_amp / 3
+            noise = noise_amp * mx.random.normal(sine_waves.shape)
+            sine_waves = sine_waves * uv + noise
+            return sine_waves, uv, noise
+
+        istftnet.SineGen.__call__ = _sinegen_call
+        print("[tts] applied Kokoro SineGen length-alignment patch")
+    except Exception as e:
+        print(f"[tts] could not patch Kokoro ({e}); long sentences may fail")
+
+
 # ---- LLM ---------------------------------------------------------------------
 def build_messages(history, memories, documents=None, profile=None,
                    persona: str | None = None) -> list[dict]:
@@ -120,6 +171,7 @@ def build_messages(history, memories, documents=None, profile=None,
             "never read a whole document aloud:\n" + joined
         )
     system += "\n\n" + MEMORY_DIRECTIVES
+    system += "\n\n" + RECALL_GUARD
     return [{"role": "system", "content": system}, *history]
 
 
@@ -168,6 +220,62 @@ def llm_reply(history: list[dict], memories: list[str],
               cfg: dict | None = None) -> str:
     messages = build_messages(history, memories, documents, profile, persona)
     return llm_complete(messages, cfg)
+
+
+def llm_stream(messages: list[dict], cfg: dict | None = None):
+    """Yield reply text token-by-token from the configured backend.
+
+    Used by the streaming turn path so the server can synthesize and ship
+    audio sentence-by-sentence instead of waiting for the whole reply.
+    """
+    cfg = cfg or {}
+    backend = cfg.get("backend", "ollama")
+    thinking = bool(cfg.get("thinking", False))
+    if backend == "openai":
+        base = (cfg.get("openai_base") or "").rstrip("/")
+        model = cfg.get("openai_model") or "gpt-4o-mini"
+        headers = {"Content-Type": "application/json"}
+        if cfg.get("api_key"):
+            headers["Authorization"] = f"Bearer {cfg['api_key']}"
+        with httpx.Client(timeout=600) as client:
+            with client.stream("POST", f"{base}/chat/completions", headers=headers,
+                               json={"model": model, "messages": messages,
+                                     "stream": True, "temperature": 0.6}) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        line = line[6:]
+                    if line.strip() == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    tok = (obj.get("choices") or [{}])[0].get("delta", {}).get("content")
+                    if tok:
+                        yield tok
+    else:
+        url = (cfg.get("ollama_url") or OLLAMA_URL).rstrip("/")
+        model = cfg.get("ollama_model") or LLM_MODEL
+        with httpx.Client(timeout=600) as client:
+            with client.stream("POST", f"{url}/api/chat",
+                               json={"model": model, "messages": messages, "stream": True,
+                                     "think": thinking, "options": {"temperature": 0.6}}) as r:
+                r.raise_for_status()
+                for line in r.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    tok = obj.get("message", {}).get("content")
+                    if tok:
+                        yield tok
+                    if obj.get("done"):
+                        break
 
 
 # ---- memory directive parsing ------------------------------------------------
@@ -235,6 +343,299 @@ def list_memories(strata) -> list[dict]:
     return [{"id": r.id, "text": r.content} for r in active]
 
 
+# ---- deterministic memory capture (no LLM) -----------------------------------
+# Rule-based extraction from the user's own words. Runs every turn regardless of
+# what the model does, so memory no longer depends on the LLM emitting directives.
+def _clean(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip(" .,!?;:'\"").strip()
+
+
+def capture_memory(strata, user_text: str) -> list[str]:
+    """Extract durable facts / forget-requests from a user utterance and apply
+    them to Strata directly. Returns a list of change descriptions for logging."""
+    text = (user_text or "").strip()
+    if not text:
+        return []
+    memories = list_memories(strata)
+    changes: list[str] = []
+
+    def add(fact: str) -> None:
+        fact = _clean(fact)
+        if len(fact) < 2:
+            return
+        fact = fact[0].upper() + fact[1:]
+        before = {m["text"] for m in memories}
+        _add_or_supersede(strata, fact, memories)
+        memories.append({"id": -1, "text": fact})   # keep snapshot fresh for dedup
+        if fact not in before:
+            changes.append(f"+ {fact}")
+
+    # 1) Explicit forget — takes the whole turn.
+    m = re.search(r"\b(?:forget|delete)\b(?:\s+(?:about|the\s+memory\s+about|that|my))?\s+(.+)", text, re.I)
+    if m:
+        kw = _clean(m.group(1))
+        if kw:
+            _forget(strata, kw, memories)
+            return [f"- forget: {kw}"]
+
+    # 2) Explicit remember — store the clause verbatim.
+    m = re.search(r"\b(?:remember|make a note|note that|keep in mind|don'?t forget)\b(?:\s+that)?\s+(.+)", text, re.I)
+    if m:
+        add(m.group(1))
+        return changes
+
+    # 3) Occupation — preserve the preposition so it reads naturally.
+    m = re.search(r"\bi work (as|at|in)\s+([^.!?]+)", text, re.I)
+    if m:
+        add(f"Works {m.group(1).lower()} {_clean(m.group(2))}")
+    m = re.search(r"\bmy job is\s+([^.!?]+)", text, re.I)
+    if m:
+        add(f"Job: {_clean(m.group(1))}")
+
+    # 4) Other high-confidence durable patterns (each independent).
+    #    Location/allergy allow commas (e.g. "Austin, Texas"); preferences stop
+    #    at a comma to avoid swallowing a following clause.
+    pats = [
+        (r"\b(?:my name is|i am called|i'?m called|you can call me|call me)\s+([A-Za-z][A-Za-z'’\-]+(?:\s+[A-Za-z][A-Za-z'’\-]+)?)", "Name is {}"),
+        (r"\b(?:i live in|i'?m from|i am from|i'?m based in|i am based in|i'?m located in)\s+([^.!?]+?)(?:\s+and\b|[.!?]|$)", "Lives in {}"),
+        (r"\b(?:i'?m allergic to|i am allergic to|allergic to)\s+([^.!?]+?)(?:\s+and\b|[.!?]|$)", "Allergic to {}"),
+        (r"\bi (?:really )?like\s+([^.,!?]+)", "Likes {}"),
+        (r"\bi (?:really )?love\s+([^.,!?]+)", "Loves {}"),
+        (r"\bi (?:really )?enjoy\s+([^.,!?]+)", "Enjoys {}"),
+        (r"\bi (?:really )?prefer\s+([^.,!?]+)", "Prefers {}"),
+        (r"\bi (?:really )?(?:hate|dislike|don'?t like)\s+([^.,!?]+)", "Dislikes {}"),
+    ]
+    for pat, tmpl in pats:
+        m = re.search(pat, text, re.I)
+        if m:
+            add(tmpl.format(_clean(m.group(1))))
+
+    # 4) Pets / family — only for a known set of nouns to avoid false positives.
+    m = re.search(r"\bi have (?:a |an )?(dog|cat|son|daughter|wife|husband|partner|"
+                  r"brother|sister|kid|child|baby|pet)\b(?:\s+(?:named|called)\s+([A-Za-z]+))?",
+                  text, re.I)
+    if m:
+        noun, name = m.group(1), m.group(2)
+        add(f"Has a {noun}" + (f" named {name}" if name else ""))
+
+    return changes
+
+
+# ---- LLM extraction pass (covers natural speech the patterns miss) -----------
+_EXTRACT_PROMPT = """You pull durable facts about the user out of their latest message, for long-term memory.
+Return ONLY a JSON array of short factual strings written in the third person, e.g.
+["Has a dog named Rex", "Works as a nurse", "Restoring a vintage motorcycle", "Allergic to shellfish"].
+Include stable things: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, health, and notable life facts.
+Exclude: questions, comments about the assistant, fleeting events with no lasting significance, pure small talk, and anything already in existing memory.
+If nothing durable is stated, return [].
+
+Existing memory (do not duplicate):
+{existing}
+
+User message:
+"{text}"
+
+JSON array:"""
+
+
+def extract_facts_llm(user_text: str, existing: list[str], cfg: dict | None = None) -> list[str]:
+    """Ask the configured model to extract durable facts as a JSON array.
+    Runs after the spoken reply, so it never adds latency to speech."""
+    text = (user_text or "").strip()
+    if not text:
+        return []
+    prompt = _EXTRACT_PROMPT.format(
+        existing="\n".join(f"- {m}" for m in existing) or "(none)", text=text)
+    try:
+        raw = llm_complete([{"role": "user", "content": prompt}],
+                           {**(cfg or {}), "thinking": False})
+    except Exception as e:
+        print(f"[memory] extraction call failed: {e}")
+        return []
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except Exception:
+        return []
+    out = []
+    for x in arr:
+        if isinstance(x, str) and len(_clean(x)) > 2:
+            out.append(_clean(x))
+    return out[:5]
+
+
+def add_facts(strata, facts: list[str]) -> list[str]:
+    """Persist extracted facts via the same dedup/supersede path. Returns new ones."""
+    if not facts:
+        return []
+    memories = list_memories(strata)
+    added = []
+    for f in facts:
+        before = {m["text"] for m in memories}
+        _add_or_supersede(strata, f, memories)
+        memories.append({"id": -1, "text": f})
+        if f not in before:
+            added.append(f)
+    return added
+
+
+# ---- conversation review -----------------------------------------------------
+# Replays a saved transcript to (a) recover durable facts the live pass missed
+# and fold them into memory, and (b) grade how the assistant behaved. The facts
+# are what actually "improve the model": they become context on future turns.
+_REVIEW_PROMPT = """You are grading a past voice conversation. Judge ONLY the assistant's behavior.
+Return ONLY JSON, no prose:
+{{"recall":"good|mixed|poor","persona":"good|mixed|poor","brevity":"good|mixed|poor","summary":"<=14 words","tips":["short fix", "..."]}}
+- recall: did it correctly use what it knows about the user when relevant, and never deny a fact it should know?
+- persona: did it stay natural and in character?
+- brevity: were replies short enough for spoken voice (about 1-3 sentences)?
+Give 0-3 concrete tips. If it did well, tips can be [].
+
+Transcript:
+{transcript}
+
+JSON:"""
+
+
+def _transcript_text(turns: list[dict], limit: int = 40) -> str:
+    rows = [t for t in turns if t.get("role") in ("user", "assistant")][-limit:]
+    return "\n".join(f"{'User' if t['role']=='user' else 'Assistant'}: {t['content']}"
+                     for t in rows)
+
+
+def review_session(strata, turns: list[dict], cfg: dict | None = None) -> dict:
+    """Returns {added: [new facts], assessment: {...}}."""
+    user_text = "\n".join(t["content"] for t in turns if t.get("role") == "user")
+    existing = [m["text"] for m in list_memories(strata)]
+    added = add_facts(strata, extract_facts_llm(user_text, existing, cfg))
+
+    assessment = {}
+    try:
+        raw = llm_complete(
+            [{"role": "user", "content": _REVIEW_PROMPT.format(
+                transcript=_transcript_text(turns))}],
+            {**(cfg or {}), "thinking": False})
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if m:
+            assessment = json.loads(m.group(0))
+    except Exception as e:
+        print(f"[review] assessment failed: {e}")
+    return {"added": added, "assessment": assessment}
+
+
+# ---- memory hygiene (contradiction / duplicate audit) ------------------------
+_AUDIT_PROMPT = """You clean up a user's long-term memory. Below are stored memory facts, each with an id.
+Flag ONLY entries that should change, and classify each with a "kind":
+- "contradiction": two facts that genuinely cannot both be true at the same time
+  (e.g. "Lives in France" vs "Lives in Japan", "Has no pets" vs "Has a dog"). Keep the more recent/specific; remove the other.
+- "redundant": one fact is fully implied by ANOTHER, more specific fact IN THIS SAME LIST
+  (e.g. "Based in the United States" is redundant only if another listed fact says "Lives in Colorado").
+  Keep the specific one; remove the general one. If no more-specific fact is present, do NOT flag it.
+- "duplicate": the exact same fact written two ways. Keep the clearest; remove the rest.
+- "junk": not a real durable fact — a fragment, a question, or a placeholder like "About me". keep is null.
+
+CRITICAL RULE: facts that are all TRUE but at different levels of detail are NOT contradictions.
+"Lives in the US" and "Lives in Colorado" do not conflict — at most the broader one is "redundant",
+and ONLY when both are present in the list. Never call something a contradiction just because one
+fact is more or less specific than another. Do not invent overlaps that aren't in the list.
+
+Return ONLY a JSON array ([] if the memory is already clean). Each element:
+{{"kind":"contradiction|redundant|duplicate|junk","remove":[<id>,...],"keep":<id or null>,"reason":"<short why>"}}
+
+Memory facts:
+{facts}
+
+JSON array:"""
+
+
+def audit_memories(strata, cfg: dict | None = None) -> list[dict]:
+    """Flag contradictions / redundancy / duplicates / junk among the stored
+    memories. Returns issues with resolved text, ready for the user to confirm.
+    Compares memories only against each other — nothing is deleted here."""
+    mems = list_memories(strata)
+    if not mems:
+        return []
+    by_id = {m["id"]: m["text"] for m in mems}
+    facts = "\n".join(f"[{m['id']}] {m['text']}" for m in mems)
+    try:
+        raw = llm_complete(
+            [{"role": "user", "content": _AUDIT_PROMPT.format(facts=facts)}],
+            {**(cfg or {}), "thinking": False})
+    except Exception as e:
+        print(f"[audit] call failed: {e}")
+        return []
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except Exception:
+        return []
+    issues = []
+    valid_kinds = {"contradiction", "redundant", "duplicate", "junk"}
+    for it in arr if isinstance(arr, list) else []:
+        try:
+            remove = [int(i) for i in (it.get("remove") or []) if int(i) in by_id]
+        except Exception:
+            remove = []
+        if not remove:
+            continue
+        keep = it.get("keep")
+        keep = int(keep) if isinstance(keep, (int, str)) and str(keep).lstrip("-").isdigit() else None
+        kind = str(it.get("kind", "")).lower().strip()
+        issues.append({
+            "kind": kind if kind in valid_kinds else "duplicate",
+            "remove": [str(i) for i in remove],  # stringify: JS rounds 64-bit ints
+            "remove_texts": [by_id[i] for i in remove],
+            "keep": keep if keep in by_id else None,
+            "keep_text": by_id.get(keep) if keep in by_id else None,
+            "reason": str(it.get("reason", "")).strip(),
+        })
+    return issues
+
+
+# ---- recall judge (semantic, entailment-aware) -------------------------------
+_JUDGE_PROMPT = """A user has these TRUE facts about them (numbered):
+{facts}
+
+The assistant was asked what it knows about the user and replied:
+"{answer}"
+
+For EACH numbered fact, decide whether the reply conveys or clearly IMPLIES it.
+Use common-sense entailment: a specific statement implies a broader one — mentioning
+"Colorado" implies "based in the United States"; "has a dog named Molly" implies having a pet.
+Return ONLY a JSON array of objects, one per fact: {{"n":<number>,"recalled":true|false}}."""
+
+
+def judge_recall(facts: list[str], answer: str, cfg: dict | None = None) -> list[bool]:
+    """Return a recalled/not list aligned to `facts`, judged semantically by the
+    model (so entailment counts), rather than brittle keyword matching."""
+    if not facts:
+        return []
+    numbered = "\n".join(f"{i+1}. {f}" for i, f in enumerate(facts))
+    try:
+        raw = llm_complete(
+            [{"role": "user", "content": _JUDGE_PROMPT.format(
+                facts=numbered, answer=answer or "")}],
+            {**(cfg or {}), "thinking": False})
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        arr = json.loads(m.group(0)) if m else []
+    except Exception as e:
+        print(f"[eval] judge failed: {e}")
+        return [False] * len(facts)
+    verdict = {}
+    for o in arr if isinstance(arr, list) else []:
+        try:
+            verdict[int(o.get("n"))] = bool(o.get("recalled"))
+        except Exception:
+            pass
+    return [verdict.get(i + 1, False) for i in range(len(facts))]
+
+
+
+
 # ---- main loop ---------------------------------------------------------------
 def main() -> int:
     print("Loading models (first run downloads them)...")
@@ -244,6 +645,7 @@ def main() -> int:
 
     asr = parakeet_mlx.from_pretrained(ASR_MODEL)
     tts = load_model(TTS_MODEL)
+    patch_kokoro_tts()
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     strata = Strata.open(db_path=DB_PATH)
     print(f"Ready. LLM={LLM_MODEL}  ASR=Parakeet-V3  TTS=Kokoro  DB={DB_PATH}")
