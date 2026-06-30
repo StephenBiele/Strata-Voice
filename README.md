@@ -44,7 +44,9 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
 - **Reference files** — upload a PDF / DOCX / text file (resume, profile, notes) and
   ask about it by voice.
 - **Settings** — edit the assistant's name, edit the system prompt, toggle "thinking",
-  and choose your model backend.
+  choose your model backend, and tune **voice cadence** (experimental): how the reply is
+  chunked for speech (sentence / clause / hybrid / whole), edge-silence trimming, the gap
+  between chunks, and punctuation smoothing — all A/B-able via the voice Preview.
 - **Provider-agnostic** — Quick (local Ollama, pick or paste any model) or Advanced
   (any OpenAI-compatible endpoint + key). API keys are stored in the **macOS
   Keychain**, never on disk.

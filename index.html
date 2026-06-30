@@ -770,7 +770,37 @@
         <label>Speed · <span class="speedval" id="set_speedval">1.0×</span></label>
         <input type="range" id="set_speed" class="slider" min="0.6" max="1.6" step="0.05" value="1.0">
       </div>
+
+      <h3 class="subhead">Cadence (experimental)</h3>
+      <div class="field"><label>Chunking</label>
+        <select id="set_chunking" class="select">
+          <option value="sentence">Sentence — one at a time (snappy start)</option>
+          <option value="clause">Clause — break at commas too</option>
+          <option value="hybrid">Hybrid — fast first line, then smooth</option>
+          <option value="whole">Whole — one natural pass (slower start)</option>
+        </select>
+      </div>
+      <div class="switchrow">
+        <div>
+          <div class="switchlabel">Tighten pauses</div>
+          <div class="switchsub">Trim the dead air Kokoro pads onto each chunk. Recommended — it's the biggest fix for choppy pauses.</div>
+        </div>
+        <button class="switch" id="set_trim" role="switch" aria-checked="true"><span class="knob"></span></button>
+      </div>
+      <div class="field">
+        <label>Gap between chunks · <span class="speedval" id="set_gapval">30 ms</span></label>
+        <input type="range" id="set_gap" class="slider" min="0" max="160" step="10" value="30">
+      </div>
+      <div class="field"><label>Punctuation</label>
+        <select id="set_smoothing" class="select">
+          <option value="natural">Natural — dashes become short pauses</option>
+          <option value="verbatim">Verbatim — speak punctuation as written</option>
+          <option value="flowing">Flowing — fewer pauses, more run-on</option>
+        </select>
+      </div>
+
       <button class="ghostbtn" id="set_preview">▶ Preview voice</button>
+      <div class="hint">Preview uses these cadence settings even before you save — tweak, preview, then Save to apply to calls.</div>
       <div class="teststatus" id="set_previewstatus"></div>
 
       <h3 class="subhead">Model</h3>
@@ -1127,6 +1157,12 @@ async function loadSettings(){
   sel.value=s.tts_voice||"af_heart";
   $("#set_speed").value=s.tts_speed||1.0;
   $("#set_speedval").textContent=Number(s.tts_speed||1.0).toFixed(2).replace(/0$/,"")+"×";
+  // cadence
+  $("#set_chunking").value=s.tts_chunking||"hybrid";
+  setSwitch($("#set_trim"), s.tts_trim!==false);
+  const gap=(s.tts_gap_ms!=null?s.tts_gap_ms:30);
+  $("#set_gap").value=gap; $("#set_gapval").textContent=gap+" ms";
+  $("#set_smoothing").value=s.tts_smoothing||"natural";
   $("#setModel").innerHTML=modelConfigHTML("set");
   wireModelConfig("set"); fillModelConfig("set", s);
 }
@@ -1134,7 +1170,9 @@ async function previewVoice(){
   const st=$("#set_previewstatus"); st.className="teststatus"; st.textContent="Synthesizing…";
   const btn=$("#set_preview"); btn.disabled=true;
   try{
-    const body={voice:$("#set_voice").value, speed:parseFloat($("#set_speed").value)};
+    const body={voice:$("#set_voice").value, speed:parseFloat($("#set_speed").value),
+      chunking:$("#set_chunking").value, trim:$("#set_trim").getAttribute("aria-checked")==="true",
+      gap_ms:parseInt($("#set_gap").value,10), smoothing:$("#set_smoothing").value};
     const d=await (await fetch("/tts/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
     if(!d.ok||!d.audio){ st.className="teststatus err"; st.textContent="Couldn’t synthesize."; }
     else {
@@ -1155,6 +1193,10 @@ async function saveSettings(){
     thinking:$("#set_thinking").getAttribute("aria-checked")==="true",
     tts_voice:$("#set_voice").value,
     tts_speed:parseFloat($("#set_speed").value),
+    tts_chunking:$("#set_chunking").value,
+    tts_trim:$("#set_trim").getAttribute("aria-checked")==="true",
+    tts_gap_ms:parseInt($("#set_gap").value,10),
+    tts_smoothing:$("#set_smoothing").value,
   }, collectModelConfig("set"));
   const btn=$("#settingsSave"); btn.disabled=true; btn.textContent="Saved ✓";
   try{ await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); }catch(_){}
@@ -1673,6 +1715,11 @@ $("#set_resetPrompt").addEventListener("click",(e)=>{
 });
 $("#set_speed").addEventListener("input",(e)=>{
   $("#set_speedval").textContent=Number(e.target.value).toFixed(2).replace(/0$/,"")+"×";
+});
+$("#set_gap").addEventListener("input",(e)=>{ $("#set_gapval").textContent=e.target.value+" ms"; });
+$("#set_trim").addEventListener("click",(e)=>{
+  const on=e.currentTarget.getAttribute("aria-checked")==="true";
+  setSwitch(e.currentTarget, !on);
 });
 $("#set_preview").addEventListener("click", previewVoice);
 

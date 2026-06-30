@@ -61,12 +61,18 @@ DEFAULT_SETTINGS = {
     "configured": False,                 # model setup completed in onboarding
     "tts_voice": "af_heart",
     "tts_speed": 1.0,
+    # voice cadence (experimental): how the spoken reply is chunked + smoothed
+    "tts_chunking": "hybrid",            # 'sentence' | 'clause' | 'hybrid' | 'whole'
+    "tts_trim": True,                    # trim edge silence from each chunk
+    "tts_gap_ms": 30,                    # consistent gap appended between chunks
+    "tts_smoothing": "natural",          # 'natural' | 'verbatim' | 'flowing'
 }
 # What a POST /settings is allowed to write (api_key handled separately).
 SETTINGS_FIELDS = (
     "assistant_name", "persona", "thinking", "backend",
     "ollama_url", "ollama_model", "openai_base", "openai_model", "configured",
     "tts_voice", "tts_speed",
+    "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
 )
 
 # English Kokoro voices (American 'a' / British 'b'). The first letter is also
@@ -220,56 +226,122 @@ def _backfill_events() -> None:
 
 
 # ---- speech synthesis --------------------------------------------------------
-def _for_speech(text: str) -> str:
-    """Smooth punctuation that makes Kokoro's cadence choppy: dashes and
-    semicolons become clean clause breaks, ellipses collapse, and runs of
-    commas/spaces are tidied. Only affects what's spoken, not what's stored."""
-    text = re.sub(r"\s*[—–]\s*", ", ", text)   # em/en dash -> comma pause
+def _for_speech(text: str, mode: str = "natural") -> str:
+    """Punctuation pass before synthesis — Kokoro pauses on punctuation, so this
+    shapes cadence. Only affects what's spoken, not what's stored.
+      verbatim — speak punctuation as written (just tidy spacing)
+      natural  — dashes/semicolons become comma pauses; collapse comma runs
+      flowing  — drop commas/semicolons/colons/dashes to minimize mid-line pauses
+    """
+    if mode == "verbatim":
+        text = re.sub(r"\s+([,.!?;:])", r"\1", text)
+        return re.sub(r"[ \t]{2,}", " ", text).strip()
+    if mode == "flowing":
+        text = re.sub(r"\s*[—–]\s*", " ", text)        # dash -> just a space
+        text = re.sub(r"[;:,]", " ", text)             # no clause pauses at all
+        text = text.replace("…", ".")
+        text = re.sub(r"\.{2,}", ".", text)
+        text = re.sub(r"\s+([.!?])", r"\1", text)
+        return re.sub(r"[ \t]{2,}", " ", text).strip()
+    # natural (default)
+    text = re.sub(r"\s*[—–]\s*", ", ", text)
     text = text.replace(";", ",").replace("…", ".")
-    text = re.sub(r"\.{2,}", ".", text)          # ellipsis -> single stop
-    text = re.sub(r"\s*,\s*(,\s*)+", ", ", text)  # collapse repeated commas
-    text = re.sub(r"\s+([,.!?])", r"\1", text)    # no space before punctuation
+    text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(r"\s*,\s*(,\s*)+", ", ", text)
+    text = re.sub(r"\s+([,.!?])", r"\1", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
 
 
-def _synth_sentence(text: str, voice: str, speed: float) -> np.ndarray:
-    """Synthesize one short segment. Returns float32 @ TTS_SR (empty on failure)."""
-    text = _for_speech(text)
+def _trim_silence(audio: np.ndarray, keep_ms: int = 20, thresh: float = 0.01) -> np.ndarray:
+    """Trim near-silent head/tail (the main cause of weird inter-chunk pauses),
+    keeping a small cushion so words don't clip."""
+    if audio.size == 0:
+        return audio
+    loud = np.where(np.abs(audio) > thresh)[0]
+    if loud.size == 0:
+        return audio
+    keep = int(vc.TTS_SR * keep_ms / 1000)
+    start = max(0, int(loud[0]) - keep)
+    end = min(audio.size, int(loud[-1]) + keep)
+    return audio[start:end]
+
+
+def _silence(ms: int) -> np.ndarray:
+    return np.zeros(int(vc.TTS_SR * max(0, ms) / 1000), dtype=np.float32)
+
+
+def _synth_sentence(text: str, voice: str, speed: float, *,
+                    trim: bool = True, smoothing: str = "natural") -> np.ndarray:
+    """Synthesize one segment. Returns float32 @ TTS_SR (empty on failure)."""
+    text = _for_speech(text, smoothing)
     if not text:
         return np.zeros(0, dtype=np.float32)
     try:
         segs = list(_tts.generate(text, voice=voice, speed=speed,
                                   lang_code=_lang_code(voice)))
         if segs:
-            return np.concatenate([np.asarray(s.audio) for s in segs]).astype(np.float32)
+            audio = np.concatenate([np.asarray(s.audio) for s in segs]).astype(np.float32)
+            return _trim_silence(audio) if trim else audio
     except Exception as e:
         print(f"[tts] skipped sentence ({e}): {text!r}")
     return np.zeros(0, dtype=np.float32)
 
 
-def _synth(text: str, voice: str | None = None, speed: float | None = None) -> np.ndarray:
-    """Synthesize speech, one sentence at a time.
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_CLAUSE_SPLIT = re.compile(r"(?<=[.!?,;:])\s+")
 
-    Kokoro-MLX has a broadcast bug in its harmonic source generator that
-    trips on long single segments. Splitting into sentences keeps each
-    generate() call short enough to avoid it; a sentence that still fails is
-    skipped rather than killing the whole turn.
-    """
+
+def _chunk_text(text: str, chunking: str) -> list[str]:
+    """Split a full reply into synthesis chunks per the chosen strategy."""
+    text = text.strip()
+    if not text:
+        return []
+    if chunking == "whole":
+        return [text]
+    sents = [p.strip() for p in _SENT_SPLIT.split(text) if p.strip()] or [text]
+    if chunking == "hybrid":
+        return [sents[0], " ".join(sents[1:])] if len(sents) > 1 else sents
+    if chunking == "clause":
+        out = []
+        for snt in sents:
+            out.extend(p.strip() for p in _CLAUSE_SPLIT.split(snt) if p.strip())
+        return out or sents
+    return sents  # sentence
+
+
+def _synth_reply(text: str, *, chunking: str | None = None, trim: bool | None = None,
+                 gap_ms: int | None = None, smoothing: str | None = None,
+                 voice: str | None = None, speed: float | None = None) -> np.ndarray:
+    """Non-streaming full synthesis honoring the cadence settings. Used by the
+    voice Preview and the non-streaming /turn path; the streaming path mirrors
+    this chunk-by-chunk. Kokoro-MLX's harmonic-source broadcast bug is handled by
+    patch_kokoro_tts(); a chunk that still fails is skipped, not fatal."""
     s = _settings()
+    chunking = chunking or s["tts_chunking"]
+    trim = s["tts_trim"] if trim is None else trim
+    gap_ms = int(s["tts_gap_ms"] if gap_ms is None else gap_ms)
+    smoothing = smoothing or s["tts_smoothing"]
     voice = voice or s["tts_voice"]
     speed = speed if speed is not None else float(s["tts_speed"])
-    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
-    gap = np.zeros(int(vc.TTS_SR * 0.12), dtype=np.float32)
+    gap = _silence(gap_ms)
     out: list[np.ndarray] = []
-    for part in parts or [text]:
-        audio = _synth_sentence(part, voice, speed)
+    for chunk in _chunk_text(text, chunking):
+        audio = _synth_sentence(chunk, voice, speed, trim=trim, smoothing=smoothing)
         if audio.size:
             out.append(audio)
-            out.append(gap)
+            if gap.size:
+                out.append(gap)
     if not out:
         return np.zeros(0, dtype=np.float32)
+    if gap.size and len(out) >= 2:
+        out = out[:-1]   # no trailing gap
     return np.concatenate(out)
+
+
+def _synth(text: str, voice: str | None = None, speed: float | None = None) -> np.ndarray:
+    """Back-compat wrapper: full synthesis under the current cadence settings."""
+    return _synth_reply(text, voice=voice, speed=speed)
 
 
 def _tts_wav_b64(text: str) -> str:
@@ -289,6 +361,7 @@ def _audio_b64(audio: np.ndarray) -> str:
 
 _THINK_TAG = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _SENT_BOUNDARY = re.compile(r'[.!?]+["\')\]]*(\s|$)')
+_CLAUSE_BOUNDARY = re.compile(r'[.!?,;:]+["\')\]]*(\s|$)')
 
 
 def _spoken_region(full: str) -> str:
@@ -304,12 +377,14 @@ def _spoken_region(full: str) -> str:
     return t
 
 
-def _pop_sentences(spoken: str, emitted: int) -> tuple[list[str], int]:
-    """Pull complete sentences from spoken[emitted:]; return (sentences, new_emitted)."""
+def _pop_sentences(spoken: str, emitted: int, clause: bool = False) -> tuple[list[str], int]:
+    """Pull complete sentences (or clauses) from spoken[emitted:]; return
+    (segments, new_emitted)."""
+    boundary = _CLAUSE_BOUNDARY if clause else _SENT_BOUNDARY
     out: list[str] = []
     region = spoken[emitted:]
     while True:
-        m = _SENT_BOUNDARY.search(region)
+        m = boundary.search(region)
         if not m:
             break
         end = m.end()
@@ -464,12 +539,30 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool):
     mem = vc.list_memories(_strata)
     mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
     voice, speed = s["tts_voice"], float(s["tts_speed"])
+    # cadence settings: how the spoken reply is chunked + smoothed
+    chunking = s["tts_chunking"]
+    trim, smoothing, gap_ms = bool(s["tts_trim"]), s["tts_smoothing"], int(s["tts_gap_ms"])
+    gap = _silence(gap_ms)
+    clause = chunking == "clause"
+    stream_chunks = chunking in ("sentence", "clause", "hybrid")  # 'whole' waits for the end
+    first_only = chunking == "hybrid"   # hybrid streams only the first sentence early
     messages = vc.build_messages(
         _history, mem_text,
         documents=_doc_context(), profile=_profile_context(), persona=s["persona"],
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
+
+    def _emit(seg: str):
+        nonlocal seq
+        audio = _synth_sentence(seg, voice, speed, trim=trim, smoothing=smoothing)
+        if audio.size == 0:
+            return None
+        if gap.size:
+            audio = np.concatenate([audio, gap])
+        seq += 1
+        return {"type": "audio", "seq": seq, "text": seg, "audio": _audio_b64(audio)}
+
     try:
         for tok in vc.llm_stream(messages, _llm_cfg()):
             full += tok
@@ -477,25 +570,34 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool):
             if emit_tokens and len(clean) > emitted_tok:
                 yield {"type": "token", "text": clean[emitted_tok:]}
                 emitted_tok = len(clean)
-            if speak:
-                sents, emitted_audio = _pop_sentences(clean, emitted_audio)
-                for seg in sents:
-                    audio = _synth_sentence(seg, voice, speed)
-                    if audio.size:
-                        seq += 1
-                        yield {"type": "audio", "seq": seq, "text": seg, "audio": _audio_b64(audio)}
+            if speak and stream_chunks:
+                if first_only:
+                    if emitted_audio == 0:
+                        m = _SENT_BOUNDARY.search(clean)
+                        if m:
+                            emitted_audio = m.end()
+                            msg = _emit(clean[:m.end()].strip())
+                            if msg:
+                                yield msg
+                else:
+                    sents, emitted_audio = _pop_sentences(clean, emitted_audio, clause=clause)
+                    for seg in sents:
+                        msg = _emit(seg)
+                        if msg:
+                            yield msg
     except Exception as e:
         print(f"[stream] llm error: {e}")
         yield {"type": "error", "error": str(e)}
         return
 
     if speak:
-        tail = _spoken_region(full)[emitted_audio:].strip()
-        if tail:
-            audio = _synth_sentence(tail, voice, speed)
-            if audio.size:
-                seq += 1
-                yield {"type": "audio", "seq": seq, "text": tail, "audio": _audio_b64(audio)}
+        # remainder: the trailing partial (sentence/clause), everything after the
+        # first sentence (hybrid), or the whole reply ('whole') — as one smooth pass.
+        remainder = _spoken_region(full)[emitted_audio:].strip()
+        if remainder:
+            msg = _emit(remainder)
+            if msg:
+                yield msg
 
     # parse directives from the full reply, persist memory + transcript
     reply = vc.apply_directives(_strata, full, mem)
@@ -714,11 +816,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True})
         if u.path == "/tts/preview":
             body = json.loads(self._body() or b"{}")
-            voice = body.get("voice") or _settings()["tts_voice"]
-            speed = float(body.get("speed", _settings()["tts_speed"]))
-            sample = body.get("text") or "Hi, this is how I sound. I'm ready when you are."
+            st = _settings()
+            voice = body.get("voice") or st["tts_voice"]
+            speed = float(body.get("speed", st["tts_speed"]))
+            # cadence params come from the (possibly unsaved) Settings controls so
+            # the user can tweak -> Preview -> adjust without saving first.
+            chunking = body.get("chunking") or st["tts_chunking"]
+            trim = bool(body["trim"]) if "trim" in body else st["tts_trim"]
+            gap_ms = int(body.get("gap_ms", st["tts_gap_ms"]))
+            smoothing = body.get("smoothing") or st["tts_smoothing"]
+            sample = body.get("text") or ("Here's how I sound. I can pause between "
+                "thoughts, breathe a little, and keep the rhythm natural.")
             with _lock:
-                audio = _synth(sample, voice=voice, speed=speed)
+                audio = _synth_reply(sample, chunking=chunking, trim=trim, gap_ms=gap_ms,
+                                     smoothing=smoothing, voice=voice, speed=speed)
             if audio.size == 0:
                 return self._json(200, {"ok": False, "error": "synthesis failed"})
             buf = io.BytesIO()
