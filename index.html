@@ -772,33 +772,39 @@
       </div>
 
       <h3 class="subhead">Cadence (experimental)</h3>
+      <p class="hint" style="margin:-.4rem 0 1rem">Speech rhythm and pacing.</p>
       <div class="field"><label>Chunking</label>
         <select id="set_chunking" class="select">
-          <option value="sentence">Sentence — one at a time (snappy start)</option>
-          <option value="clause">Clause — break at commas too</option>
-          <option value="hybrid">Hybrid — fast first line, then smooth</option>
-          <option value="whole">Whole — one natural pass (slower start)</option>
+          <option value="sentence">Sentence — Fast; sentence-by-sentence.</option>
+          <option value="clause">Clause — Quick bursts, breaks at commas.</option>
+          <option value="hybrid">Hybrid — Snappy start, then smooths out.</option>
+          <option value="whole">Whole — Slowest start, most natural phrasing.</option>
         </select>
+        <div class="hint">How speech is broken up.</div>
       </div>
       <div class="switchrow">
         <div>
           <div class="switchlabel">Tighten pauses</div>
-          <div class="switchsub">Trim the dead air Kokoro pads onto each chunk. Recommended — it's the biggest fix for choppy pauses.</div>
+          <div class="switchsub">Smooths out awkward pauses.</div>
         </div>
         <button class="switch" id="set_trim" role="switch" aria-checked="true"><span class="knob"></span></button>
       </div>
       <div class="field">
         <label>Gap between chunks · <span class="speedval" id="set_gapval">30 ms</span></label>
         <input type="range" id="set_gap" class="slider" min="0" max="160" step="10" value="30">
+        <div class="hint">Exact pause time between phrases.</div>
       </div>
       <div class="field"><label>Punctuation</label>
         <select id="set_smoothing" class="select">
           <option value="natural">Natural — dashes become short pauses</option>
           <option value="verbatim">Verbatim — speak punctuation as written</option>
-          <option value="flowing">Flowing — fewer pauses, more run-on</option>
+          <option value="flowing">Flowing — Continuous flow</option>
         </select>
       </div>
 
+      <div class="field"><label>Preview text</label>
+        <textarea id="set_previewtext" rows="2" placeholder="Optional — type your own line to hear it. Leave blank for the default sample."></textarea>
+      </div>
       <button class="ghostbtn" id="set_preview">▶ Preview voice</button>
       <div class="hint">Preview uses these cadence settings even before you save — tweak, preview, then Save to apply to calls.</div>
       <div class="teststatus" id="set_previewstatus"></div>
@@ -1172,7 +1178,8 @@ async function previewVoice(){
   try{
     const body={voice:$("#set_voice").value, speed:parseFloat($("#set_speed").value),
       chunking:$("#set_chunking").value, trim:$("#set_trim").getAttribute("aria-checked")==="true",
-      gap_ms:parseInt($("#set_gap").value,10), smoothing:$("#set_smoothing").value};
+      gap_ms:parseInt($("#set_gap").value,10), smoothing:$("#set_smoothing").value,
+      text:$("#set_previewtext").value.trim()};   // blank -> server uses default sample
     const d=await (await fetch("/tts/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
     if(!d.ok||!d.audio){ st.className="teststatus err"; st.textContent="Couldn’t synthesize."; }
     else {
