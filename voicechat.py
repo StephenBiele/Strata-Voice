@@ -346,8 +346,10 @@ def _forget(strata, keywords: str, memories: list[dict]) -> None:
 
 # ---- memory listing ----------------------------------------------------------
 def list_memories(strata) -> list[dict]:
-    from strata.canonical.records import Status
-    recs = strata.engine.store.query(exclude_tombstoned=True)
+    # Facts only (L1). Excludes L0 EPISODE events, which live on the same store but
+    # are the raw episodic spine for the timeline, not distilled memories.
+    from strata.canonical.records import Status, RecordType
+    recs = strata.engine.store.query(record_type=RecordType.FACT, exclude_tombstoned=True)
     active = [r for r in recs if r.status in (Status.ACTIVE, Status.REINFORCED)]
     active.sort(key=lambda r: r.created_at)
     return [{"id": r.id, "text": r.content} for r in active]

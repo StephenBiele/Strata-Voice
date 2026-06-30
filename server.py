@@ -446,9 +446,84 @@ def _handle_turn(wav_bytes: bytes) -> dict:
         }
 
 
+def _stream_turn(text: str, *, speak: bool, emit_tokens: bool):
+    """Shared turn core for both voice and text. Runs the full memory + LLM +
+    events + session pipeline and yields NDJSON-ready dicts:
+      - token deltas ({"type":"token"}) when emit_tokens (text chat),
+      - synthesized audio ({"type":"audio"}) when speak (voice, or text+TTS).
+    Modality-agnostic: the only difference upstream is how `text` was obtained."""
+    if _session is None:
+        _start_session()
+    _history.append({"role": "user", "content": text})
+    event_id = vc.record_event(_strata, text)     # episodic spine (L0 event)
+    captured = vc.capture_memory(_strata, text, event_id)   # deterministic, no LLM
+    if captured:
+        print("[memory]", captured)
+
+    s = _settings()
+    mem = vc.list_memories(_strata)
+    mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
+    voice, speed = s["tts_voice"], float(s["tts_speed"])
+    messages = vc.build_messages(
+        _history, mem_text,
+        documents=_doc_context(), profile=_profile_context(), persona=s["persona"],
+    )
+
+    full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
+    try:
+        for tok in vc.llm_stream(messages, _llm_cfg()):
+            full += tok
+            clean = _spoken_region(full)   # strips [MEM_*] directives + <think>
+            if emit_tokens and len(clean) > emitted_tok:
+                yield {"type": "token", "text": clean[emitted_tok:]}
+                emitted_tok = len(clean)
+            if speak:
+                sents, emitted_audio = _pop_sentences(clean, emitted_audio)
+                for seg in sents:
+                    audio = _synth_sentence(seg, voice, speed)
+                    if audio.size:
+                        seq += 1
+                        yield {"type": "audio", "seq": seq, "text": seg, "audio": _audio_b64(audio)}
+    except Exception as e:
+        print(f"[stream] llm error: {e}")
+        yield {"type": "error", "error": str(e)}
+        return
+
+    if speak:
+        tail = _spoken_region(full)[emitted_audio:].strip()
+        if tail:
+            audio = _synth_sentence(tail, voice, speed)
+            if audio.size:
+                seq += 1
+                yield {"type": "audio", "seq": seq, "text": tail, "audio": _audio_b64(audio)}
+
+    # parse directives from the full reply, persist memory + transcript
+    reply = vc.apply_directives(_strata, full, mem)
+    _history.append({"role": "assistant", "content": reply})
+    _session["turns"].append({"role": "user", "content": text, "t": time.time()})
+    _session["turns"].append({"role": "assistant", "content": reply, "t": time.time()})
+    if not _session["title"]:
+        _session["title"] = text[:60]
+    _persist_session()
+
+    # LLM extraction pass — captures durable facts from natural speech that the
+    # deterministic patterns miss. Runs after the reply, so it never delays output.
+    try:
+        cur = [m["text"] for m in vc.list_memories(_strata)]
+        new_facts = vc.extract_facts_llm(text, cur, _llm_cfg())
+        added = vc.add_facts(_strata, new_facts, event_id)
+        if added:
+            print("[memory] extracted:", added)
+    except Exception as e:
+        print("[memory] extraction error:", e)
+
+    memories = [m["text"] for m in vc.list_memories(_strata)]
+    yield {"type": "done", "reply": reply, "memories": memories}
+
+
 def _handle_turn_stream(wav_bytes: bytes):
-    """Streaming turn: yields NDJSON-ready dicts. Synthesizes and ships audio
-    sentence-by-sentence as the LLM streams, so playback starts much sooner."""
+    """Voice streaming turn: transcribe the mic audio, then run the shared core
+    with audio synthesis on (and no token stream — the caption rides the audio)."""
     with _lock:
         tmp = HERE / ".turn_in.wav"
         tmp.write_bytes(wav_bytes)
@@ -457,69 +532,19 @@ def _handle_turn_stream(wav_bytes: bytes):
             yield {"type": "empty"}
             return
         yield {"type": "meta", "transcript": text}
+        yield from _stream_turn(text, speak=True, emit_tokens=False)
 
-        if _session is None:
-            _start_session()
-        _history.append({"role": "user", "content": text})
-        event_id = vc.record_event(_strata, text)     # episodic spine (L0 event)
-        captured = vc.capture_memory(_strata, text, event_id)   # deterministic, no LLM
-        if captured:
-            print("[memory]", captured)
 
-        s = _settings()
-        mem = vc.list_memories(_strata)
-        mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
-        voice, speed = s["tts_voice"], float(s["tts_speed"])
-        messages = vc.build_messages(
-            _history, mem_text,
-            documents=_doc_context(), profile=_profile_context(), persona=s["persona"],
-        )
-
-        full, emitted, seq = "", 0, 0
-        try:
-            for tok in vc.llm_stream(messages, _llm_cfg()):
-                full += tok
-                sents, emitted = _pop_sentences(_spoken_region(full), emitted)
-                for seg in sents:
-                    audio = _synth_sentence(seg, voice, speed)
-                    if audio.size:
-                        seq += 1
-                        yield {"type": "audio", "seq": seq, "text": seg, "audio": _audio_b64(audio)}
-        except Exception as e:
-            print(f"[stream] llm error: {e}")
-            yield {"type": "error", "error": str(e)}
+def _handle_chat_stream(text: str, speak: bool):
+    """Text streaming turn: same pipeline, fed a typed message. Streams the reply
+    as text tokens; also speaks it via TTS when the user opted in."""
+    text = (text or "").strip()
+    with _lock:
+        if not text:
+            yield {"type": "empty"}
             return
-
-        tail = _spoken_region(full)[emitted:].strip()
-        if tail:
-            audio = _synth_sentence(tail, voice, speed)
-            if audio.size:
-                seq += 1
-                yield {"type": "audio", "seq": seq, "text": tail, "audio": _audio_b64(audio)}
-
-        # parse directives from the full reply, persist memory + transcript
-        reply = vc.apply_directives(_strata, full, mem)
-        _history.append({"role": "assistant", "content": reply})
-        _session["turns"].append({"role": "user", "content": text, "t": time.time()})
-        _session["turns"].append({"role": "assistant", "content": reply, "t": time.time()})
-        if not _session["title"]:
-            _session["title"] = text[:60]
-        _persist_session()
-
-        # LLM extraction pass — captures durable facts from natural speech that
-        # the deterministic patterns miss. Runs after the reply is fully streamed,
-        # so it never delays the spoken response.
-        try:
-            cur = [m["text"] for m in vc.list_memories(_strata)]
-            new_facts = vc.extract_facts_llm(text, cur, _llm_cfg())
-            added = vc.add_facts(_strata, new_facts, event_id)
-            if added:
-                print("[memory] extracted:", added)
-        except Exception as e:
-            print("[memory] extraction error:", e)
-
-        memories = [m["text"] for m in vc.list_memories(_strata)]
-        yield {"type": "done", "reply": reply, "memories": memories}
+        yield {"type": "meta", "transcript": text}
+        yield from _stream_turn(text, speak=speak, emit_tokens=True)
 
 
 # ---- recall eval -------------------------------------------------------------
@@ -725,6 +750,27 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             try:
                 for line in _handle_turn_stream(wav):
+                    self.wfile.write((json.dumps(line) + "\n").encode("utf-8"))
+                    self.wfile.flush()
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                try:
+                    self.wfile.write((json.dumps({"type": "error", "error": str(e)}) + "\n").encode("utf-8"))
+                    self.wfile.flush()
+                except Exception:
+                    pass
+            return
+        if u.path == "/chat/stream":
+            body = json.loads(self._body() or b"{}")
+            msg = str(body.get("message", ""))
+            speak = bool(body.get("speak", False))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            try:
+                for line in _handle_chat_stream(msg, speak):
                     self.wfile.write((json.dumps(line) + "\n").encode("utf-8"))
                     self.wfile.flush()
             except Exception as e:

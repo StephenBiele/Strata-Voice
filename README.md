@@ -20,6 +20,9 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
 
 - **Push-to-talk, not VAD.** Hold **Space**, speak, release. No turn-detection
   guesswork, no mis-fires, no awkward latency — it responds the instant you let go.
+- **Or just type.** Prefer not to talk? "Send a message instead" opens a text chat
+  (replies stream in, optionally spoken aloud). Typed and spoken turns share the same
+  session, memory, and timeline — switch freely.
 - **On-device speech.** [`parakeet-mlx`](https://github.com/senstella/parakeet-mlx)
   for ASR and [Kokoro via `mlx-audio`](https://github.com/Blaizzy/mlx-audio) for
   TTS, both running on Apple's MLX. Fast and private.

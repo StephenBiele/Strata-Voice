@@ -441,6 +441,49 @@
   .tl-facts{ display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.6rem; }
   .tl-fact{ font-size:.78rem; background:oklch(0.88 0.08 150); color:oklch(0.27 0.06 150); padding:.2rem .58rem; border-radius:999px; }
 
+  /* ---------- text chat ---------- */
+  .begin.ghost{
+    margin-top:.7rem; color:var(--sage-deep); background:none;
+    box-shadow:none; border:1px solid oklch(0.80 0.06 150);
+    font-size:.94rem; font-weight:600; padding:.7em 1.8em;
+  }
+  .begin.ghost:hover{ background:oklch(0.97 0.02 145); filter:none; }
+  .chatpane{ width:100%; max-width:680px; margin:0 auto; flex:1; min-height:0;
+    display:flex; flex-direction:column; gap:.7rem;
+    padding:.2rem clamp(1.2rem,5vw,2.4rem) 1.2rem; }
+  .chatlog{ flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column;
+    gap:.5rem; padding:.3rem 0; }
+  .chatlog .bubble{ max-width:80%; }
+  .chatlog .bubble.streaming{ opacity:.92; }
+  .chatlog .empty{ margin:auto; text-align:center; }
+  .composer{ display:flex; gap:.55rem; align-items:flex-end; }
+  .composer textarea{
+    flex:1; resize:none; max-height:140px; font:inherit; font-size:.96rem; line-height:1.4;
+    color:var(--ink); background:oklch(0.99 0.01 120 / .7);
+    border:1px solid var(--line); border-radius:.85rem; padding:.7em .9em;
+    transition:border-color .2s var(--ease), box-shadow .2s var(--ease);
+  }
+  .composer textarea:focus{ outline:none; border-color:var(--sage-deep);
+    box-shadow:0 0 0 3px oklch(0.74 0.06 168 / .25); }
+  .sendbtn{
+    appearance:none; border:none; cursor:pointer; font:inherit; font-weight:600; font-size:.92rem;
+    color:var(--paper); background:linear-gradient(180deg, var(--sage-deep), var(--sage-edge));
+    border-radius:.85rem; padding:.72em 1.15em; transition:filter .2s var(--ease), transform .15s var(--ease);
+  }
+  .sendbtn:hover{ filter:brightness(1.05); transform:translateY(-1px); }
+  .sendbtn:disabled{ opacity:.5; cursor:default; transform:none; }
+  .speakrow{ display:flex; align-items:center; gap:.45rem; font-size:.82rem; color:var(--ink-soft); }
+  .speakrow input{ accent-color:var(--sage-deep); }
+  .callcomposer{ display:flex; gap:.5rem; width:min(440px,86vw); margin-top:.2rem; }
+  .callcomposer input{
+    flex:1; font:inherit; font-size:.92rem; color:var(--ink);
+    background:oklch(0.99 0.01 120 / .7); border:1px solid var(--line);
+    border-radius:999px; padding:.6em 1em; transition:border-color .2s var(--ease), box-shadow .2s var(--ease);
+  }
+  .callcomposer input:focus{ outline:none; border-color:var(--sage-deep);
+    box-shadow:0 0 0 3px oklch(0.74 0.06 168 / .25); }
+  .callcomposer .sendbtn{ border-radius:999px; padding:.6em 1.1em; }
+
   .bubble{ max-width:80%; padding:.7rem 1rem; border-radius:1.1rem; margin-bottom:.6rem; line-height:1.42; font-size:.98rem; }
   .bubble.user{ margin-left:auto; background:linear-gradient(180deg, oklch(0.86 0.06 130), oklch(0.80 0.075 132)); color:oklch(0.26 0.05 135); border-bottom-right-radius:.35rem; }
   .bubble.assistant{ margin-right:auto; background:oklch(0.99 0.01 120 / .75); border:1px solid var(--line); color:var(--ink); border-bottom-left-radius:.35rem; }
@@ -572,7 +615,8 @@
     <div class="wordmark">{{ASSISTANT_NAME}}</div>
     <p class="tagline">A voice you can just <em>talk</em> to. She listens while you hold a key, remembers what matters — and keeps it all on your device.</p>
     <button class="begin" id="beginBtn">Start conversation</button>
-    <p class="hint">Hold <kbd>Space</kbd> to talk · everything stays local</p>
+    <button class="begin ghost" id="beginChatBtn">Send a message instead</button>
+    <p class="hint">Hold <kbd>Space</kbd> to talk · or type · everything stays local</p>
     <nav class="landingnav">
       <button data-view="profile">Profile</button><span>·</span>
       <button data-view="timeline">Timeline</button><span>·</span>
@@ -616,6 +660,10 @@
         <button class="ptt" id="pttBtn"><span class="dot"></span><span id="pttLabel">Hold to talk</span></button>
         <button class="end" id="endBtn"><span class="sq"></span>End call</button>
       </div>
+      <form class="callcomposer" id="callComposer">
+        <input id="callChatInput" type="text" autocomplete="off" placeholder="…or type a message" aria-label="Type a message">
+        <button type="submit" class="sendbtn" aria-label="Send message">Send</button>
+      </form>
     </div>
     <div class="memflash" id="memflash">✦ <span>committed to memory</span></div>
     <aside class="chatdrawer" id="chatSidebar" aria-label="Past chats">
@@ -703,6 +751,22 @@
       </div>
       <div id="reviewResult" class="toolresult" hidden></div>
       <div id="chatDetailBody"></div>
+    </div>
+  </section>
+
+  <!-- TEXT CHAT -->
+  <section class="view panel" id="textchat" hidden>
+    <header class="panelhead">
+      <button class="back" data-back aria-label="Back">←</button>
+      <h2>Message {{ASSISTANT_NAME}}</h2>
+    </header>
+    <div class="chatpane">
+      <div class="chatlog" id="chatLog"></div>
+      <form class="composer" id="chatComposer">
+        <textarea id="chatInput" rows="1" placeholder="Type a message…" aria-label="Message"></textarea>
+        <button type="submit" class="sendbtn" id="chatSend" aria-label="Send message">Send</button>
+      </form>
+      <label class="speakrow"><input type="checkbox" id="chatSpeak"> <span>Speak replies aloud</span></label>
     </div>
   </section>
 
@@ -842,13 +906,14 @@ function end(){
 }
 
 /* ---------- view navigation ---------- */
-const VIEWS=["landing","call","timeline","chats","chatDetail","memories","files","profile","settings","modelsetup"];
+const VIEWS=["landing","call","textchat","timeline","chats","chatDetail","memories","files","profile","settings","modelsetup"];
 function showView(id){
   VIEWS.forEach(v=>{ const el=document.getElementById(v); if(el) el.hidden=(v!==id); });
 }
 function openView(v){
   showView(v);
   if(v==="chats") loadChats();
+  else if(v==="textchat") openTextChat();
   else if(v==="timeline") loadTimeline();
   else if(v==="memories"){ const mt=$("#memTools"); if(mt){ mt.hidden=true; mt.innerHTML=""; } loadMemories(); }
   else if(v==="files") loadFiles();
@@ -1253,6 +1318,87 @@ async function enqueueChunk(b64){
   };
 }
 
+/* ---------- text chat (shares session/memory/timeline with voice) ---------- */
+let chatBusy=false;
+function ensureAudio(){
+  if(!ac) ac = new (window.AudioContext||window.webkitAudioContext)();
+  if(ac.state==="suspended") ac.resume();
+}
+async function streamChat(text, {speak, onToken, onAudio, onDone, onError}){
+  let r;
+  try{ r=await fetch("/chat/stream",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message:text, speak:!!speak})}); }
+  catch(e){ onError&&onError(e); return; }
+  const reader=r.body.getReader(); const dec=new TextDecoder(); let sbuf="";
+  while(true){
+    const {done,value}=await reader.read();
+    if(done) break;
+    sbuf+=dec.decode(value,{stream:true});
+    let nl;
+    while((nl=sbuf.indexOf("\n"))>=0){
+      const line=sbuf.slice(0,nl).trim(); sbuf=sbuf.slice(nl+1);
+      if(!line) continue;
+      let m; try{ m=JSON.parse(line); }catch(_){ continue; }
+      if(m.type==="token") onToken&&onToken(m.text);
+      else if(m.type==="audio") onAudio&&onAudio(m.audio);
+      else if(m.type==="done") onDone&&onDone(m);
+      else if(m.type==="error") onError&&onError(new Error(m.error||"error"));
+    }
+  }
+}
+function addBubble(role, text){
+  const log=$("#chatLog");
+  const b=document.createElement("div");
+  b.className="bubble "+(role==="user"?"user":"assistant");
+  b.textContent=text;
+  log.appendChild(b); log.scrollTop=log.scrollHeight;
+  return b;
+}
+function openTextChat(){
+  const log=$("#chatLog");
+  if(log && !log.childElementCount){
+    log.innerHTML=`<div class="empty"><span class="big">Say hi</span>Type below — ${ASSISTANT_NAME} remembers across voice and text alike.</div>`;
+  }
+  const inp=$("#chatInput");
+  if(inp) setTimeout(()=>inp.focus(), 60);
+}
+async function sendTextChat(){
+  const inp=$("#chatInput"); const text=(inp.value||"").trim();
+  if(!text || chatBusy) return;
+  const log=$("#chatLog"); const em=log.querySelector(".empty"); if(em) em.remove();
+  chatBusy=true; inp.value=""; inp.style.height="auto";
+  const speak=$("#chatSpeak").checked;
+  if(speak){ ensureAudio(); stopPlayback(); }
+  addBubble("user", text);
+  const a=addBubble("assistant", "…"); a.classList.add("streaming");
+  let acc="";
+  await streamChat(text, {
+    speak,
+    onToken:(t)=>{ acc+=t; a.textContent=acc; log.scrollTop=log.scrollHeight; },
+    onAudio:(b64)=>{ enqueueChunk(b64); },
+    onDone:(m)=>{ a.textContent=m.reply||acc||"…"; a.classList.remove("streaming");
+                  if(speak) streamDone=true; flashMemory(m.memories); log.scrollTop=log.scrollHeight; },
+    onError:()=>{ a.textContent=acc||"Sorry — something went wrong."; a.classList.remove("streaming"); },
+  });
+  chatBusy=false; inp.focus();
+}
+async function sendCallChat(){
+  const inp=$("#callChatInput"); const text=(inp.value||"").trim();
+  if(!text || busy) return;
+  inp.value=""; busy=true; pttBtn.disabled=true;
+  stopPlayback(); setState("thinking"); showCaption(text, "user");
+  let gotAudio=false, acc="";
+  await streamChat(text, {
+    speak:true,
+    onToken:(t)=>{ acc+=t; },
+    onAudio:(b64)=>{ gotAudio=true; enqueueChunk(b64); },
+    onDone:(m)=>{ streamDone=true; showCaption(m.reply||acc, "assistant"); flashMemory(m.memories); },
+    onError:()=>{ if(!gotAudio) setState("idle"); },
+  });
+  busy=false; pttBtn.disabled=false;
+  if(!gotAudio) setState("idle");
+}
+
 async function endTalk(){
   if(!holding) return;
   holding=false;
@@ -1358,6 +1504,17 @@ $("#beginBtn").addEventListener("click", start);
 endBtn.addEventListener("click", end);
 historyToggle.addEventListener("click",()=>setHistoryCollapsed(!call.classList.contains("history-collapsed")));
 historyClose.addEventListener("click",()=>setHistoryCollapsed(true));
+
+// text chat: landing entry, composer submit, in-call composer
+$("#beginChatBtn").addEventListener("click", ()=>openView("textchat"));
+$("#chatComposer").addEventListener("submit", (e)=>{ e.preventDefault(); sendTextChat(); });
+$("#chatInput").addEventListener("keydown", (e)=>{
+  if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendTextChat(); }
+});
+$("#chatInput").addEventListener("input", (e)=>{
+  e.target.style.height="auto"; e.target.style.height=Math.min(e.target.scrollHeight,140)+"px";
+});
+$("#callComposer").addEventListener("submit", (e)=>{ e.preventDefault(); sendCallChat(); });
 
 // ---------- memory tools: review / audit / eval ----------
 function esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":String(s); return d.innerHTML; }
