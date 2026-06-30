@@ -118,6 +118,12 @@ parses and writes to Strata (using supersession when it updates an existing fact
 "Forget …" appends `[MEM_DEL]`, which performs a canonical-first hard delete
 (tombstone) in Strata. The directives are stripped before anything is spoken.
 
+**Conversations carry over.** When a conversation ends it's recapped into Strata's
+episodic layer. On a later turn, a retrieval layer embeds what you just said and — only
+when it's relevant (asking to recall, "continue where we left off", or referring back to a
+topic) — injects the matching recaps. So "what were we just talking about?" works, without
+the recaps ever intruding on unrelated chat.
+
 **Recall scales with your memory.** While the store is small, every fact is
 injected each turn (perfect recall, essentially free). Once it grows past a
 threshold, the assistant instead asks Strata's `recall()` for the most relevant

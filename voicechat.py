@@ -159,17 +159,24 @@ def patch_kokoro_tts() -> None:
 
 # ---- LLM ---------------------------------------------------------------------
 def build_messages(history, memories, documents=None, profile=None,
-                   persona: str | None = None) -> list[dict]:
+                   persona: str | None = None, recent=None) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
 
     `persona` is the user-editable part; the fixed MEMORY_DIRECTIVES are
-    always appended so the memory feature works regardless of edits.
+    always appended so the memory feature works regardless of edits. `recent` is
+    a list of conversation recaps injected only when the retrieval layer judged
+    them relevant this turn (so they're never volunteered on unrelated turns).
     """
     mem_block = "\n".join(f"- {m}" for m in memories) or "(none yet)"
     system = persona or PERSONA_PROMPT
     if profile:
         system += f"\n\n{profile}"
     system += f"\n\nCURRENT MEMORIES:\n{mem_block}"
+    if recent:
+        joined = "\n".join(f"- {r}" for r in recent)
+        system += ("\n\nRECENT CONVERSATIONS (recaps of earlier sessions, surfaced because "
+                   "they're relevant to what the user just said — use them to answer what you "
+                   "talked about or to pick up where you left off):\n" + joined)
     if documents:
         joined = "\n\n".join(documents)
         system += (
@@ -224,8 +231,9 @@ def llm_reply(history: list[dict], memories: list[str],
               documents: list[str] | None = None,
               profile: str | None = None,
               persona: str | None = None,
-              cfg: dict | None = None) -> str:
-    messages = build_messages(history, memories, documents, profile, persona)
+              cfg: dict | None = None,
+              recent=None) -> str:
+    messages = build_messages(history, memories, documents, profile, persona, recent)
     return llm_complete(messages, cfg)
 
 
@@ -635,6 +643,152 @@ def build_timeline(strata, limit: int = 300) -> list[dict]:
         out.append({"id": str(e["id"]), "t": e["t"], "text": e["text"], "facts": facts})
     out.sort(key=lambda m: m["t"], reverse=True)
     return out[:limit]
+
+
+# ---- conversation recaps + relevance-gated injection -------------------------
+# Each finished conversation gets a 1-2 sentence recap stored in Strata's episodic
+# layer (L0 EPISODE, subtype "summary"). A retrieval layer decides each turn whether
+# any recap is relevant — by embedding similarity, not by asking the model to behave.
+_SUMMARY_PROMPT = """Summarize this conversation in ONE or TWO sentences, third person, \
+focused on what the user talked about, asked for, or planned — phrased so a future you can \
+recall "what we talked about." No preamble; output only the summary.
+
+Conversation:
+{transcript}
+
+Summary:"""
+
+
+def summarize_session(turns: list[dict], cfg: dict | None = None) -> str:
+    rows = [t for t in (turns or []) if t.get("role") in ("user", "assistant")]
+    if not rows:
+        return ""
+    transcript = "\n".join(
+        f"{'User' if t['role']=='user' else 'Assistant'}: {t['content']}" for t in rows[-40:])
+    try:
+        out = llm_complete(
+            [{"role": "user", "content": _SUMMARY_PROMPT.format(transcript=transcript)}],
+            {**(cfg or {}), "thinking": False})
+        out = re.sub(r"\s+", " ", out).strip()
+        if out:
+            return out[:300]
+    except Exception as e:
+        print(f"[recap] summarize failed: {e}")
+    first = next((t["content"] for t in rows if t.get("role") == "user"), "")
+    return re.sub(r"\s+", " ", first).strip()[:140]
+
+
+def record_summary(strata, text: str, *, ts_ms: int | None = None) -> int | None:
+    """Store a conversation recap as an L0 EPISODE (subtype 'summary'). Kept out of
+    the durable-fact path (list_memories is FACT-only) and the turn timeline."""
+    from strata.canonical.records import RecordType
+    text = (text or "").strip()
+    if not text:
+        return None
+    fields = {"record_subtype": "summary"}
+    if ts_ms is not None:
+        fields["created_at"] = ts_ms
+    try:
+        res = strata.write_event(text, record_type=RecordType.EPISODE, **fields)
+        return res.get("id") if isinstance(res, dict) else None
+    except Exception as e:
+        print(f"[recap] write failed: {e}")
+        return None
+
+
+def list_summaries(strata) -> list[dict]:
+    """Conversation recaps, newest first."""
+    from strata.canonical.records import RecordType, Tier
+    recs = strata.engine.store.query(tier=Tier.L0, record_type=RecordType.EPISODE,
+                                     exclude_tombstoned=True)
+    recs = [r for r in recs if r.record_subtype == "summary"]
+    recs.sort(key=lambda r: r.created_at, reverse=True)
+    return [{"id": r.id, "text": r.content, "t": r.created_at} for r in recs]
+
+
+# Canonical "asking to recall / continue" phrasings. The user's message is compared
+# to these by embedding, so meta-recall is caught even with no shared topic words.
+_RECALL_EXEMPLARS = [
+    "what were we just talking about",
+    "what did we talk about last time",
+    "what were we discussing",
+    "continue where we left off",
+    "let's pick up where we left off",
+    "remind me what we talked about",
+    "catch me up on our last conversation",
+    "what did we discuss earlier",
+]
+_CONTINUITY_RE = re.compile(
+    r"\b(what (were|did) we (just )?(talk|talking|discuss|discussing)"
+    r"|(continue|pick up) (where|from) we left off"
+    r"|last (time|conversation|chat)|earlier (you|we)"
+    r"|we were (talking|discussing)|catch me up|recap"
+    r"|remind me what we|what did we talk about)\b", re.I)
+
+_exemplar_vecs: dict = {}   # model_id -> [vec, ...]
+_recap_vecs: dict = {}      # summary id -> vec
+
+
+def wants_recent_context(text: str) -> bool:
+    """Keyword fallback for meta-recall when no embedder is available."""
+    return bool(_CONTINUITY_RE.search(text or ""))
+
+
+def _cosine(a, b) -> float:
+    from strata.vector.embedder import cosine
+    try:
+        return cosine(a, b)
+    except Exception:
+        return 0.0
+
+
+def relevant_recaps(strata, query: str, embedder, *, max_n: int = 3,
+                    meta_thresh: float = 0.62, topical_thresh: float = 0.50) -> list[str]:
+    """The secondary trigger: return the conversation recaps worth injecting this
+    turn — by embedding relevance, independent of the model. Meta-recall intent is
+    matched against canonical exemplars; topical references against the recaps
+    themselves. Returns [] (inject nothing) when nothing is relevant."""
+    summaries = list_summaries(strata)   # newest first
+    if not summaries:
+        return []
+    query = (query or "").strip()
+    if embedder is None:
+        return [s["text"] for s in summaries[:max_n]] if wants_recent_context(query) else []
+    try:
+        qv = embedder.embed(query)
+    except Exception as e:
+        print(f"[recap] query embed failed: {e}")
+        return [s["text"] for s in summaries[:max_n]] if wants_recent_context(query) else []
+
+    vecs = _exemplar_vecs.get(embedder.model_id)
+    if vecs is None:
+        try:
+            vecs = [embedder.embed(x) for x in _RECALL_EXEMPLARS]
+        except Exception:
+            vecs = []
+        _exemplar_vecs[embedder.model_id] = vecs
+    meta = any(_cosine(qv, ev) >= meta_thresh for ev in vecs)
+
+    selected = list(summaries[:max_n]) if meta else []
+    for s in summaries:
+        rv = _recap_vecs.get(s["id"])
+        if rv is None:
+            try:
+                rv = embedder.embed(s["text"])
+            except Exception:
+                rv = None
+            _recap_vecs[s["id"]] = rv
+        if rv is not None and _cosine(qv, rv) >= topical_thresh:
+            selected.append(s)
+
+    seen, out = set(), []
+    for s in selected:
+        if s["id"] not in seen:
+            seen.add(s["id"])
+            out.append(s["text"])
+        if len(out) >= max_n:
+            break
+    return out
 
 
 # ---- conversation review -----------------------------------------------------

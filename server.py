@@ -459,6 +459,16 @@ def _finalize_session() -> None:
     global _session
     if _session and _session["turns"]:
         _session["ended_at"] = _session["ended_at"] or time.time()
+        # recap this conversation into Strata's episodic layer, so a later session
+        # can recall what it was about. One LLM call at end-of-conversation.
+        try:
+            recap = vc.summarize_session(_session["turns"], _llm_cfg())
+            if recap:
+                _session["summary"] = recap
+                vc.record_summary(_strata, recap, ts_ms=int(_session["ended_at"] * 1000))
+                print("[recap]", recap)
+        except Exception as e:
+            print("[recap] finalize failed:", e)
         sessions = _read_json(SESSIONS_FILE, [])
         sessions = [s for s in sessions if s["id"] != _session["id"]]
         sessions.append(_session)
@@ -494,11 +504,12 @@ def _handle_turn(wav_bytes: bytes) -> dict:
             print("[memory]", captured)
         mem = vc.list_memories(_strata)
         mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
+        recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
         s = _settings()
         reply_raw = vc.llm_reply(
             _history, mem_text,
             documents=_doc_context(), profile=_profile_context(),
-            persona=s["persona"], cfg=_llm_cfg(),
+            persona=s["persona"], cfg=_llm_cfg(), recent=recent,
         )
         reply = vc.apply_directives(_strata, reply_raw, mem)
         _history.append({"role": "assistant", "content": reply})
@@ -538,6 +549,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool):
     s = _settings()
     mem = vc.list_memories(_strata)
     mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
+    recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
     voice, speed = s["tts_voice"], float(s["tts_speed"])
     # cadence settings: how the spoken reply is chunked + smoothed
     chunking = s["tts_chunking"]
@@ -549,6 +561,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool):
     messages = vc.build_messages(
         _history, mem_text,
         documents=_doc_context(), profile=_profile_context(), persona=s["persona"],
+        recent=recent,
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
