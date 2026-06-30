@@ -102,6 +102,7 @@ DOC_TOTAL_CAP = 16000        # across all docs
 _asr = None
 _tts = None
 _strata = None
+_embedder = None    # real embedding model if available, else None (dump-all recall)
 _lock = threading.Lock()
 
 _history: list[dict] = []
@@ -179,7 +180,7 @@ def _llm_cfg(overrides: dict | None = None) -> dict:
 
 
 def _load_models() -> None:
-    global _asr, _tts, _strata
+    global _asr, _tts, _strata, _embedder
     print("Loading models (first run downloads them)…")
     import parakeet_mlx
     from mlx_audio.tts.utils import load_model
@@ -190,7 +191,11 @@ def _load_models() -> None:
     _tts = load_model(vc.TTS_MODEL)
     vc.patch_kokoro_tts()
     Path(vc.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    _strata = Strata.open(db_path=vc.DB_PATH)
+    _embedder = vc.make_embedder()
+    _strata = Strata.open(db_path=vc.DB_PATH, embedder=_embedder)
+    if _embedder is not None:
+        n = vc.warm_index(_strata)
+        print(f"  · warmed vector index with {n} memor{'y' if n==1 else 'ies'}")
     print(f"Ready · LLM={vc.LLM_MODEL} · ASR=Parakeet-V3 · TTS=Kokoro · DB={vc.DB_PATH}")
 
 
@@ -392,9 +397,10 @@ def _handle_turn(wav_bytes: bytes) -> dict:
         if captured:
             print("[memory]", captured)
         mem = vc.list_memories(_strata)
+        mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
         s = _settings()
         reply_raw = vc.llm_reply(
-            _history, [m["text"] for m in mem],
+            _history, mem_text,
             documents=_doc_context(), profile=_profile_context(),
             persona=s["persona"], cfg=_llm_cfg(),
         )
@@ -440,9 +446,10 @@ def _handle_turn_stream(wav_bytes: bytes):
 
         s = _settings()
         mem = vc.list_memories(_strata)
+        mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
         voice, speed = s["tts_voice"], float(s["tts_speed"])
         messages = vc.build_messages(
-            _history, [m["text"] for m in mem],
+            _history, mem_text,
             documents=_doc_context(), profile=_profile_context(), persona=s["persona"],
         )
 

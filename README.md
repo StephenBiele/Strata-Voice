@@ -54,6 +54,8 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
 - Python 3.12
 - [ffmpeg](https://ffmpeg.org) — `brew install ffmpeg`
 - An LLM backend — [Ollama](https://ollama.com) is easiest: `ollama pull qwen3.5:4b`
+- An embedding model for semantic recall: `ollama pull nomic-embed-text` (optional —
+  without it, memory falls back to injecting everything, which is fine at small scale)
 - The [`strata-memory`](https://github.com/StephenBiele/strata-memory) package (installed below)
 
 ## Setup
@@ -110,6 +112,13 @@ durable fact, the model appends a hidden `[MEM_ADD]` directive that the server
 parses and writes to Strata (using supersession when it updates an existing fact).
 "Forget …" appends `[MEM_DEL]`, which performs a canonical-first hard delete
 (tombstone) in Strata. The directives are stripped before anything is spoken.
+
+**Recall scales with your memory.** While the store is small, every fact is
+injected each turn (perfect recall, essentially free). Once it grows past a
+threshold, the assistant instead asks Strata's `recall()` for the most relevant
+facts for what you just said — its **vector + lexical + resolver** stack, using a
+local embedding model (`nomic-embed-text`). So "tell me about my pet" surfaces
+"has a dog named Molly" even with no shared words.
 
 ## Layout
 

@@ -39,6 +39,13 @@ ASR_MODEL = os.environ.get("VOICE_ASR_MODEL", "mlx-community/parakeet-tdt-0.6b-v
 TTS_MODEL = os.environ.get("VOICE_TTS_MODEL", "prince-canuma/Kokoro-82M")
 TTS_VOICE = os.environ.get("VOICE_TTS_VOICE", "af_heart")
 DB_PATH = os.environ.get("VOICE_DB", str(Path.home() / ".vui" / "strata_memory.db"))
+# Local embedding model for semantic recall (Strata's vector layer). Falls back
+# to dump-all if this model isn't pulled, so the app never hard-depends on it.
+EMBED_MODEL = os.environ.get("VOICE_EMBED_MODEL", "nomic-embed-text")
+# Below this many active memories, inject them all (perfect recall, ~free).
+# Above it, use Strata's recall() to select the most relevant for the turn.
+RECALL_THRESHOLD = int(os.environ.get("VOICE_RECALL_THRESHOLD", "12"))
+RECALL_TOP_K = int(os.environ.get("VOICE_RECALL_TOP_K", "8"))
 MIC_SR = 16000   # Parakeet wants 16 kHz mono
 TTS_SR = 24000   # Kokoro output rate
 
@@ -341,6 +348,86 @@ def list_memories(strata) -> list[dict]:
     active = [r for r in recs if r.status in (Status.ACTIVE, Status.REINFORCED)]
     active.sort(key=lambda r: r.created_at)
     return [{"id": r.id, "text": r.content} for r in active]
+
+
+# ---- semantic recall (Strata vector layer) -----------------------------------
+class OllamaEmbedder:
+    """Real embedding model served by the local Ollama, conforming to Strata's
+    Embedder protocol (model_id, dim, embed). Lets recall() be actually semantic
+    instead of the offline hash placeholder."""
+
+    def __init__(self, model: str = EMBED_MODEL, url: str = OLLAMA_URL) -> None:
+        self.model = model
+        self.url = url.rstrip("/")
+        self.model_id = f"ollama:{model}"
+        self.dim = len(self.embed("dimension probe"))
+
+    def embed(self, text: str) -> list[float]:
+        with httpx.Client(timeout=60) as client:
+            r = client.post(f"{self.url}/api/embed",
+                            json={"model": self.model, "input": text or " "})
+            r.raise_for_status()
+            data = r.json()
+        # /api/embed returns {"embeddings":[[...]]}; tolerate the older shape too.
+        if "embeddings" in data:
+            return data["embeddings"][0]
+        return data["embedding"]
+
+
+def make_embedder():
+    """Return an OllamaEmbedder if the embed model is available, else None so the
+    caller falls back to the offline default (and the dump-all recall path)."""
+    try:
+        emb = OllamaEmbedder()
+        print(f"  · semantic recall: ON ({emb.model_id}, dim={emb.dim})")
+        return emb
+    except Exception as e:
+        print(f"  · semantic recall: OFF (embed model unavailable: {e})")
+        return None
+
+
+def warm_index(strata) -> int:
+    """The vector store is in-memory and starts empty each run, so embed all active
+    canonical records once at startup. Returns how many were indexed."""
+    ids = [m["id"] for m in list_memories(strata)]
+    if not ids:
+        return 0
+    eng = strata.engine
+    try:
+        eng.reindex_into(eng.active_generation, eng.embedder, ids)
+    except Exception as e:
+        print(f"  · index warm-up failed: {e}")
+        return 0
+    return len(ids)
+
+
+def recall_memories(strata, query: str, top_k: int = RECALL_TOP_K) -> list[str]:
+    """Return the most relevant memory claims for this query via Strata's belief
+    bundle (vector + lexical + resolver). Falls back to listing on any error."""
+    try:
+        bundle = strata.recall(query or "", top_k=top_k, diversity=True)
+        claims, seen = [], set()
+        for cat in ("current_beliefs", "recent_context", "interaction_guidance",
+                    "open_conflicts", "hypotheses"):
+            for e in bundle.get(cat, []):
+                c = (e.get("claim") or "").strip()
+                if c and c not in seen:
+                    seen.add(c)
+                    claims.append(c)
+        return claims[:top_k] if claims else [m["text"] for m in list_memories(strata)]
+    except Exception as e:
+        print(f"[recall] fell back to list: {e}")
+        return [m["text"] for m in list_memories(strata)]
+
+
+def select_memories(strata, query: str, *, semantic: bool = True,
+                    threshold: int = RECALL_THRESHOLD) -> list[str]:
+    """Pick the memory texts to inject this turn. Small store -> inject everything
+    (perfect, ~free). Large store -> semantic recall of the most relevant few."""
+    mems = list_memories(strata)
+    if not semantic or len(mems) <= threshold:
+        return [m["text"] for m in mems]
+    return recall_memories(strata, query)
 
 
 # ---- deterministic memory capture (no LLM) -----------------------------------
