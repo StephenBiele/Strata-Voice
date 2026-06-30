@@ -196,7 +196,27 @@ def _load_models() -> None:
     if _embedder is not None:
         n = vc.warm_index(_strata)
         print(f"  · warmed vector index with {n} memor{'y' if n==1 else 'ies'}")
+    _backfill_events()
     print(f"Ready · LLM={vc.LLM_MODEL} · ASR=Parakeet-V3 · TTS=Kokoro · DB={vc.DB_PATH}")
+
+
+def _backfill_events() -> None:
+    """One-time: seed the episodic timeline from past saved sessions so it isn't
+    empty when the feature first ships. Skips if any turn events already exist."""
+    if vc.list_events(_strata):
+        return
+    sessions = _read_json(SESSIONS_FILE, [])
+    n = 0
+    for s in sorted(sessions, key=lambda s: s.get("started_at", 0)):
+        for turn in s.get("turns", []):
+            if turn.get("role") != "user":
+                continue
+            ts = turn.get("t")
+            ts_ms = int(ts * 1000) if isinstance(ts, (int, float)) else None
+            if vc.record_event(_strata, turn.get("content", ""), ts_ms=ts_ms):
+                n += 1
+    if n:
+        print(f"  · backfilled {n} past turn{'s' if n != 1 else ''} into the timeline")
 
 
 # ---- speech synthesis --------------------------------------------------------
@@ -393,7 +413,8 @@ def _handle_turn(wav_bytes: bytes) -> dict:
             _start_session()
 
         _history.append({"role": "user", "content": text})
-        captured = vc.capture_memory(_strata, text)   # deterministic, no LLM
+        event_id = vc.record_event(_strata, text)     # episodic spine (L0 event)
+        captured = vc.capture_memory(_strata, text, event_id)   # deterministic, no LLM
         if captured:
             print("[memory]", captured)
         mem = vc.list_memories(_strata)
@@ -440,7 +461,8 @@ def _handle_turn_stream(wav_bytes: bytes):
         if _session is None:
             _start_session()
         _history.append({"role": "user", "content": text})
-        captured = vc.capture_memory(_strata, text)   # deterministic, no LLM
+        event_id = vc.record_event(_strata, text)     # episodic spine (L0 event)
+        captured = vc.capture_memory(_strata, text, event_id)   # deterministic, no LLM
         if captured:
             print("[memory]", captured)
 
@@ -490,7 +512,7 @@ def _handle_turn_stream(wav_bytes: bytes):
         try:
             cur = [m["text"] for m in vc.list_memories(_strata)]
             new_facts = vc.extract_facts_llm(text, cur, _llm_cfg())
-            added = vc.add_facts(_strata, new_facts)
+            added = vc.add_facts(_strata, new_facts, event_id)
             if added:
                 print("[memory] extracted:", added)
         except Exception as e:
@@ -603,6 +625,10 @@ class Handler(BaseHTTPRequestHandler):
             # ids are 64-bit ints; stringify so JS doesn't round them past 2^53.
             mem = [{"id": str(m["id"]), "text": m["text"]} for m in mem]
             return self._json(200, {"memories": mem})
+        if u.path == "/timeline":
+            with _lock:
+                tl = vc.build_timeline(_strata)
+            return self._json(200, {"timeline": tl})
         if u.path == "/profile":
             p = _read_json(PROFILE_FILE, {})
             # Treat as onboarded if they finished onboarding OR any real info is

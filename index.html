@@ -426,6 +426,21 @@
   .toolresult ul{ margin:.3rem 0 .2rem; padding-left:1.1rem; }
   .toolresult li{ margin:.15rem 0; }
 
+  /* ---------- timeline (episodic) ---------- */
+  .tl{ position:relative; padding-left:1.4rem; }
+  .tl::before{ content:""; position:absolute; left:.4rem; top:.4rem; bottom:.4rem; width:2px; background:var(--line); }
+  .tl-day{ font-family:"Fraunces",serif; font-size:.98rem; font-weight:500; color:var(--ink-soft);
+    margin:1.3rem 0 .6rem -1.4rem; padding-left:1.4rem; }
+  .tl-day:first-child{ margin-top:.2rem; }
+  .tl-item{ position:relative; margin-bottom:.85rem; }
+  .tl-dot{ position:absolute; left:-1.23rem; top:.62rem; width:.6rem; height:.6rem; border-radius:50%;
+    background:var(--sage-deep); box-shadow:0 0 0 3px var(--paper); }
+  .tl-card{ background:oklch(0.99 0.01 120 / .6); border:1px solid var(--line); border-radius:.9rem; padding:.7rem .9rem; }
+  .tl-time{ font-size:.74rem; color:var(--ink-faint); margin-bottom:.22rem; }
+  .tl-said{ color:var(--ink); font-size:.95rem; line-height:1.45; }
+  .tl-facts{ display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.6rem; }
+  .tl-fact{ font-size:.78rem; background:oklch(0.88 0.08 150); color:oklch(0.27 0.06 150); padding:.2rem .58rem; border-radius:999px; }
+
   .bubble{ max-width:80%; padding:.7rem 1rem; border-radius:1.1rem; margin-bottom:.6rem; line-height:1.42; font-size:.98rem; }
   .bubble.user{ margin-left:auto; background:linear-gradient(180deg, oklch(0.86 0.06 130), oklch(0.80 0.075 132)); color:oklch(0.26 0.05 135); border-bottom-right-radius:.35rem; }
   .bubble.assistant{ margin-right:auto; background:oklch(0.99 0.01 120 / .75); border:1px solid var(--line); color:var(--ink); border-bottom-left-radius:.35rem; }
@@ -560,6 +575,7 @@
     <p class="hint">Hold <kbd>Space</kbd> to talk · everything stays local</p>
     <nav class="landingnav">
       <button data-view="profile">Profile</button><span>·</span>
+      <button data-view="timeline">Timeline</button><span>·</span>
       <button data-view="chats">Past chats</button><span>·</span>
       <button data-view="memories">Memories</button><span>·</span>
       <button data-view="files">Reference files</button><span>·</span>
@@ -690,6 +706,15 @@
     </div>
   </section>
 
+  <!-- TIMELINE -->
+  <section class="view panel" id="timeline" hidden>
+    <header class="panelhead"><button class="back" data-back aria-label="Back">←</button><h2>Timeline</h2></header>
+    <div class="panelbody">
+      <p class="panelsub">Every conversation, as it happened — with the facts {{ASSISTANT_NAME}} learned in each moment hanging off it.</p>
+      <div id="timelineBody"></div>
+    </div>
+  </section>
+
   <!-- MEMORIES -->
   <section class="view panel" id="memories" hidden>
     <header class="panelhead"><button class="back" data-back aria-label="Back">←</button><h2>Memories</h2></header>
@@ -817,13 +842,14 @@ function end(){
 }
 
 /* ---------- view navigation ---------- */
-const VIEWS=["landing","call","chats","chatDetail","memories","files","profile","settings","modelsetup"];
+const VIEWS=["landing","call","timeline","chats","chatDetail","memories","files","profile","settings","modelsetup"];
 function showView(id){
   VIEWS.forEach(v=>{ const el=document.getElementById(v); if(el) el.hidden=(v!==id); });
 }
 function openView(v){
   showView(v);
   if(v==="chats") loadChats();
+  else if(v==="timeline") loadTimeline();
   else if(v==="memories"){ const mt=$("#memTools"); if(mt){ mt.hidden=true; mt.innerHTML=""; } loadMemories(); }
   else if(v==="files") loadFiles();
   else if(v==="profile") loadProfile(false);
@@ -1110,6 +1136,39 @@ async function openDrawerChat(id,title){
     const empty=document.createElement("div"); empty.className="drawer-empty"; empty.textContent=title || "No messages saved.";
     pastChatsDrawerBody.appendChild(empty);
   }
+}
+
+function tlDayLabel(ms){
+  const d=new Date(ms), now=new Date();
+  const same=(a,b)=>a.toDateString()===b.toDateString();
+  const y=new Date(now); y.setDate(now.getDate()-1);
+  if(same(d,now)) return "Today";
+  if(same(d,y)) return "Yesterday";
+  return d.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",
+    year:d.getFullYear()===now.getFullYear()?undefined:"numeric"});
+}
+function tlTimeLabel(ms){ return new Date(ms).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}); }
+async function loadTimeline(){
+  const body=$("#timelineBody");
+  body.innerHTML=skeleton(4);
+  let list=[]; try{ list=(await (await fetch("/timeline")).json()).timeline||[]; }catch(_){}
+  if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">No moments yet</span>Start a conversation and it’ll appear here, with what ${ASSISTANT_NAME} learned in each one.</div>`; return; }
+  body.innerHTML="";
+  const tl=document.createElement("div"); tl.className="tl";
+  let lastDay="";
+  list.forEach(m=>{
+    const day=tlDayLabel(m.t);
+    if(day!==lastDay){
+      lastDay=day;
+      const h=document.createElement("div"); h.className="tl-day"; h.textContent=day; tl.appendChild(h);
+    }
+    const facts=(m.facts&&m.facts.length)
+      ? '<div class="tl-facts">'+m.facts.map(f=>`<span class="tl-fact">＋ ${esc(f)}</span>`).join("")+'</div>' : "";
+    const node=document.createElement("div"); node.className="tl-item";
+    node.innerHTML=`<div class="tl-dot"></div><div class="tl-card"><div class="tl-time">${esc(tlTimeLabel(m.t))}</div><div class="tl-said">${esc(m.text)}</div>${facts}</div>`;
+    tl.appendChild(node);
+  });
+  body.appendChild(tl);
 }
 
 async function loadMemories(){

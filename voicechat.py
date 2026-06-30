@@ -307,7 +307,9 @@ def apply_directives(strata, reply: str, memories: list[dict]) -> str:
     return "\n".join(spoken).strip()
 
 
-def _add_or_supersede(strata, fact: str, memories: list[dict]) -> None:
+def _add_or_supersede(strata, fact: str, memories: list[dict]):
+    """Write or update a fact. Returns the canonical record id of the written/
+    updated fact, or None on an exact duplicate (nothing changed)."""
     fl = fact.lower()
     # Crude topical overlap: if an existing memory shares >=2 significant
     # words, treat this as an update (supersede) rather than a new fact.
@@ -315,18 +317,19 @@ def _add_or_supersede(strata, fact: str, memories: list[dict]) -> None:
     for m in memories:
         ml = m["text"].lower()
         if m["text"].lower() == fl:
-            return  # exact dup
+            return None  # exact dup
         overlap = sig & {w for w in ml.split() if len(w) > 3}
         if len(overlap) >= 2:
             try:
-                strata.supersede_memory(m["id"], fact)
+                res = strata.supersede_memory(m["id"], fact)
                 print(f"  · memory updated: {m['text']!r} -> {fact!r}")
-                return
+                return res.get("id") if isinstance(res, dict) else None
             except Exception as e:
                 print(f"  · supersede failed ({e}); writing as new")
                 break
-    strata.write_memory(fact)
+    res = strata.write_memory(fact)
     print(f"  · memory saved: {fact!r}")
+    return res.get("id") if isinstance(res, dict) else None
 
 
 def _forget(strata, keywords: str, memories: list[dict]) -> None:
@@ -437,9 +440,12 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip(" .,!?;:'\"").strip()
 
 
-def capture_memory(strata, user_text: str) -> list[str]:
+def capture_memory(strata, user_text: str, event_id: int | None = None) -> list[str]:
     """Extract durable facts / forget-requests from a user utterance and apply
-    them to Strata directly. Returns a list of change descriptions for logging."""
+    them to Strata directly. Returns a list of change descriptions for logging.
+
+    If ``event_id`` is given, each newly added fact is linked to that source
+    event (so the timeline knows when/where the fact was learned)."""
     text = (user_text or "").strip()
     if not text:
         return []
@@ -452,8 +458,10 @@ def capture_memory(strata, user_text: str) -> list[str]:
             return
         fact = fact[0].upper() + fact[1:]
         before = {m["text"] for m in memories}
-        _add_or_supersede(strata, fact, memories)
-        memories.append({"id": -1, "text": fact})   # keep snapshot fresh for dedup
+        rid = _add_or_supersede(strata, fact, memories)
+        memories.append({"id": rid or -1, "text": fact})   # keep snapshot fresh for dedup
+        if rid and event_id:
+            _link_source(strata, rid, event_id)
         if fact not in before:
             changes.append(f"+ {fact}")
 
@@ -553,19 +561,78 @@ def extract_facts_llm(user_text: str, existing: list[str], cfg: dict | None = No
     return out[:5]
 
 
-def add_facts(strata, facts: list[str]) -> list[str]:
-    """Persist extracted facts via the same dedup/supersede path. Returns new ones."""
+def add_facts(strata, facts: list[str], event_id: int | None = None) -> list[str]:
+    """Persist extracted facts via the same dedup/supersede path. Returns new ones.
+    Links each new fact to ``event_id`` (its source turn) when provided."""
     if not facts:
         return []
     memories = list_memories(strata)
     added = []
     for f in facts:
         before = {m["text"] for m in memories}
-        _add_or_supersede(strata, f, memories)
-        memories.append({"id": -1, "text": f})
+        rid = _add_or_supersede(strata, f, memories)
+        memories.append({"id": rid or -1, "text": f})
+        if rid and event_id:
+            _link_source(strata, rid, event_id)
         if f not in before:
             added.append(f)
     return added
+
+
+# ---- events & timeline (episodic spine) --------------------------------------
+def record_event(strata, text: str, *, ts_ms: int | None = None) -> int | None:
+    """Write a conversational turn as a raw L0 event (the episodic spine). Returns
+    the event's canonical id, or None on failure. ``ts_ms`` backfills the time."""
+    from strata.canonical.records import RecordType
+    text = (text or "").strip()
+    if not text:
+        return None
+    fields = {"record_subtype": "turn"}
+    if ts_ms is not None:
+        fields["created_at"] = ts_ms
+    try:
+        res = strata.write_event(text, record_type=RecordType.EPISODE, **fields)
+        return res.get("id") if isinstance(res, dict) else None
+    except Exception as e:
+        print(f"[event] write failed: {e}")
+        return None
+
+
+def _link_source(strata, fact_id: int, event_id: int) -> None:
+    try:
+        strata.link_source(fact_id, event_id)
+    except Exception as e:
+        print(f"[event] link failed: {e}")
+
+
+def list_events(strata) -> list[dict]:
+    """All conversational-turn events, oldest first."""
+    from strata.canonical.records import RecordType, Tier
+    recs = strata.engine.store.query(tier=Tier.L0, record_type=RecordType.EPISODE,
+                                     exclude_tombstoned=True)
+    recs = [r for r in recs if r.record_subtype == "turn"]
+    recs.sort(key=lambda r: r.created_at)
+    return [{"id": r.id, "text": r.content, "t": r.created_at} for r in recs]
+
+
+def build_timeline(strata, limit: int = 300) -> list[dict]:
+    """Chronological moments (newest first). Each: the utterance and the facts that
+    were learned from it. Facts hang off the event they were derived from."""
+    events = list_events(strata)
+    id_to_text = {m["id"]: m["text"] for m in list_memories(strata)}
+    store = strata.engine.store
+    out = []
+    for e in events:
+        facts = []
+        try:
+            for fid in store.derived_from(e["id"]):
+                if fid in id_to_text:            # only still-active facts
+                    facts.append(id_to_text[fid])
+        except Exception:
+            pass
+        out.append({"id": str(e["id"]), "t": e["t"], "text": e["text"], "facts": facts})
+    out.sort(key=lambda m: m["t"], reverse=True)
+    return out[:limit]
 
 
 # ---- conversation review -----------------------------------------------------
