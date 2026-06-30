@@ -189,6 +189,61 @@
   .state-thinking  .orb::after{ --orb-tint:oklch(0.70 0.015 150); opacity:.45; } /* desaturated — working */
   .state-speaking  .orb::after{ --orb-tint:oklch(0.76 0.12 138); opacity:.7; }   /* warm green — speaking */
 
+  /* ===== living, reactive orb (bolder) =================================== *
+   * Sage palette only. All motion is transform/opacity; loops are disabled
+   * under reduced-motion. State personality comes from layers, not from
+   * changing animation speed (that snapped on hand-off — see history). */
+
+  /* Voiceprint aura: a tight sage glow that swells with the live audio level,
+     tinted per state. Bolder + more reactive than the soft .halo behind it. */
+  .aura{
+    position:absolute; width:104%; aspect-ratio:1; border-radius:50%; pointer-events:none;
+    background:radial-gradient(circle at 50% 50%,
+      var(--aura, oklch(0.80 0.10 134)) 0%, var(--aura, oklch(0.80 0.10 134)) 8%, transparent 62%);
+    opacity:calc(.06 + var(--level) * .6);
+    transform:scale(calc(.92 + var(--level) * .42));
+    filter:blur(7px);
+    transition:opacity .12s linear, transform .1s linear, background-color .4s var(--ease);
+  }
+  .state-listening .aura{ --aura:oklch(0.82 0.07 174); opacity:calc(.10 + var(--level) * .7); }
+  .state-thinking  .aura{ --aura:oklch(0.80 0.03 150); opacity:calc(.12 + var(--level) * .4); }
+  .state-speaking  .aura{ --aura:oklch(0.85 0.15 136); opacity:calc(.16 + var(--level) * .8); }
+
+  .orb > i{ position:absolute; inset:0; border-radius:50%; pointer-events:none; display:block; }
+  /* second swirl, counter-rotating + slower → parallax depth, molten core */
+  .orb-swirl2{
+    background:conic-gradient(from 210deg, transparent 0%, oklch(0.54 0.11 142 / .34) 19%,
+      transparent 45%, oklch(0.97 0.05 120 / .32) 73%, transparent 95%);
+    animation:swirl2 22s linear infinite; opacity:.5; mix-blend-mode:soft-light;
+  }
+  @keyframes swirl2{ to{ transform:rotate(-1turn); } }
+  /* inner bloom: a highlight that brightens + grows with the voice amplitude,
+     so the sphere visibly "speaks" rather than just changing color */
+  .orb-glow{
+    background:radial-gradient(circle at 50% 36%,
+      oklch(0.99 0.05 120 / .95) 0%, oklch(0.92 0.10 128 / .35) 34%, transparent 60%);
+    opacity:calc(.16 + var(--level) * .7);
+    transform:scale(calc(.86 + var(--level) * .5));
+    transition:opacity .1s linear, transform .1s linear;
+    mix-blend-mode:screen;
+  }
+  .state-speaking .orb-glow{ opacity:calc(.34 + var(--level) * .66); }
+  /* orbiting spark: a small comet that circles while the orb is thinking —
+     a distinct "pondering" personality, separate from the status dots */
+  .orb-spark{ opacity:0; transition:opacity .35s var(--ease); }
+  .orb-spark::before{
+    content:""; position:absolute; top:5%; left:50%; width:9%; aspect-ratio:1;
+    transform:translateX(-50%); border-radius:50%;
+    background:radial-gradient(circle, oklch(0.99 0.06 118) 0%, oklch(0.86 0.13 130 / .55) 48%, transparent 76%);
+    filter:blur(.5px);
+  }
+  .state-thinking .orb-spark{ opacity:.95; animation:orbit 5.5s linear infinite; }
+  @keyframes orbit{ to{ transform:rotate(1turn); } }
+  /* speaking comes alive: richer interior + a touch brighter (transitionable) */
+  .state-speaking .orb{ filter:saturate(1.12) brightness(1.03); }
+  .state-speaking .orb::before{ opacity:.92; }
+  .state-speaking .orb-swirl2{ opacity:.7; }
+
   .caption{
     min-height:3.2em; max-width:30ch; margin:0 auto; text-align:center;
     font-size:clamp(1.02rem,2.7vw,1.22rem); line-height:1.35; color:var(--ink-soft);
@@ -593,7 +648,7 @@
   .speedval{ font-variant-numeric:tabular-nums; color:var(--ink-soft); font-weight:600; }
 
   @media (prefers-reduced-motion: reduce){
-    .breath, .orb::before, .ring, .thinking-dots i, .skeleton .srow{ animation:none !important; }
+    .breath, .orb::before, .orb-swirl2, .orb-spark, .ring, .thinking-dots i, .skeleton .srow{ animation:none !important; }
     .cluster{ transition:none; }
     .thinking-dots i{ opacity:.7; }
     .caption{ transform:none; transition:opacity .3s linear; }
@@ -643,9 +698,14 @@
     <div class="orbwrap" id="orbStage" aria-hidden="true">
       <div class="cluster">
         <div class="halo"></div>
+        <div class="aura"></div>
         <div class="breath">
           <div class="ring"></div><div class="ring"></div><div class="ring"></div>
-          <div class="orb"></div>
+          <div class="orb">
+            <i class="orb-swirl2"></i>
+            <i class="orb-glow"></i>
+            <i class="orb-spark"></i>
+          </div>
         </div>
       </div>
     </div>
