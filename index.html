@@ -940,6 +940,28 @@
 
       <h3 class="subhead">Model</h3>
       <div id="setModel"></div>
+
+      <h3 class="subhead">Model controls</h3>
+      <p class="hint" style="margin:-.4rem 0 1rem">Generation settings passed to the model each turn.</p>
+      <div class="field">
+        <label>Temperature · <span class="speedval" id="set_tempval">0.6</span></label>
+        <input type="range" id="set_temp" class="slider" min="0" max="1.5" step="0.05" value="0.6">
+        <div class="hint">Lower is focused and consistent; higher is more varied.</div>
+      </div>
+      <div class="field">
+        <label>Top-p · <span class="speedval" id="set_toppval">1.0</span></label>
+        <input type="range" id="set_topp" class="slider" min="0.1" max="1" step="0.05" value="1">
+        <div class="hint">Nucleus sampling. 1.0 = off.</div>
+      </div>
+      <div class="field"><label>Max response tokens</label>
+        <input type="number" id="set_maxtokens" min="0" max="32768" step="1" value="0" inputmode="numeric">
+        <div class="hint">Cap on reply length. 0 = model default.</div>
+      </div>
+      <div class="field"><label>Context window</label>
+        <input type="number" id="set_numctx" min="0" max="131072" step="256" value="0" inputmode="numeric">
+        <div class="hint">Ollama only. 0 = model default.</div>
+      </div>
+
       <button class="savebtn" id="settingsSave">Save settings</button>
     </div>
   </section>
@@ -1390,6 +1412,13 @@ async function loadSettings(){
   const gap=(s.tts_gap_ms!=null?s.tts_gap_ms:30);
   $("#set_gap").value=gap; $("#set_gapval").textContent=gap+" ms";
   $("#set_smoothing").value=s.tts_smoothing||"natural";
+  // model controls
+  const temp=(s.llm_temperature!=null?s.llm_temperature:0.6);
+  $("#set_temp").value=temp; $("#set_tempval").textContent=Number(temp).toFixed(2).replace(/0$/,"");
+  const topp=(s.llm_top_p!=null?s.llm_top_p:1.0);
+  $("#set_topp").value=topp; $("#set_toppval").textContent=Number(topp).toFixed(2).replace(/0$/,"");
+  $("#set_maxtokens").value=(s.llm_max_tokens!=null?s.llm_max_tokens:0);
+  $("#set_numctx").value=(s.llm_num_ctx!=null?s.llm_num_ctx:0);
   $("#setModel").innerHTML=modelConfigHTML("set");
   wireModelConfig("set"); fillModelConfig("set", s);
 }
@@ -1425,6 +1454,10 @@ async function saveSettings(){
     tts_trim:$("#set_trim").getAttribute("aria-checked")==="true",
     tts_gap_ms:parseInt($("#set_gap").value,10),
     tts_smoothing:$("#set_smoothing").value,
+    llm_temperature:parseFloat($("#set_temp").value),
+    llm_top_p:parseFloat($("#set_topp").value),
+    llm_max_tokens:parseInt($("#set_maxtokens").value,10)||0,
+    llm_num_ctx:parseInt($("#set_numctx").value,10)||0,
   }, collectModelConfig("set"));
   const btn=$("#settingsSave"); btn.disabled=true; btn.textContent="Saved ✓";
   try{ await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); }catch(_){}
@@ -2006,6 +2039,8 @@ $("#set_speed").addEventListener("input",(e)=>{
   $("#set_speedval").textContent=Number(e.target.value).toFixed(2).replace(/0$/,"")+"×";
 });
 $("#set_gap").addEventListener("input",(e)=>{ $("#set_gapval").textContent=e.target.value+" ms"; });
+$("#set_temp").addEventListener("input",(e)=>{ $("#set_tempval").textContent=Number(e.target.value).toFixed(2).replace(/0$/,""); });
+$("#set_topp").addEventListener("input",(e)=>{ $("#set_toppval").textContent=Number(e.target.value).toFixed(2).replace(/0$/,""); });
 $("#set_trim").addEventListener("click",(e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
   setSwitch(e.currentTarget, !on);

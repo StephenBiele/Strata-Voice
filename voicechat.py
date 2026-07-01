@@ -189,11 +189,36 @@ def build_messages(history, memories, documents=None, profile=None,
     return [{"role": "system", "content": system}, *history]
 
 
+def _openai_payload(cfg: dict, model: str, messages: list[dict], stream: bool) -> dict:
+    """OpenAI-compatible request body with user-tunable generation controls."""
+    p = {"model": model, "messages": messages, "stream": stream,
+         "temperature": float(cfg.get("temperature", 0.6)),
+         "top_p": float(cfg.get("top_p", 1.0))}
+    mt = int(cfg.get("max_tokens", 0) or 0)
+    if mt > 0:
+        p["max_tokens"] = mt            # context window is model-fixed here
+    return p
+
+
+def _ollama_opts(cfg: dict) -> dict:
+    """Ollama `options` block with user-tunable generation controls."""
+    o = {"temperature": float(cfg.get("temperature", 0.6)),
+         "top_p": float(cfg.get("top_p", 1.0))}
+    nc = int(cfg.get("num_ctx", 0) or 0)
+    if nc > 0:
+        o["num_ctx"] = nc               # context window (Ollama-specific)
+    mt = int(cfg.get("max_tokens", 0) or 0)
+    if mt > 0:
+        o["num_predict"] = mt
+    return o
+
+
 def llm_complete(messages: list[dict], cfg: dict | None = None) -> str:
     """Call the configured LLM backend (Ollama or any OpenAI-compatible API).
 
     cfg keys: backend ('ollama'|'openai'), thinking (bool),
-      ollama_url, ollama_model, openai_base, openai_model, api_key.
+      ollama_url, ollama_model, openai_base, openai_model, api_key,
+      temperature, top_p, max_tokens, num_ctx (generation controls).
     """
     cfg = cfg or {}
     backend = cfg.get("backend", "ollama")
@@ -207,8 +232,7 @@ def llm_complete(messages: list[dict], cfg: dict | None = None) -> str:
         # Cloud reasoning models can be slow — generous timeout.
         with httpx.Client(timeout=600) as client:
             r = client.post(f"{base}/chat/completions", headers=headers,
-                            json={"model": model, "messages": messages,
-                                  "stream": False, "temperature": 0.6})
+                            json=_openai_payload(cfg, model, messages, False))
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"]
     else:
@@ -218,7 +242,7 @@ def llm_complete(messages: list[dict], cfg: dict | None = None) -> str:
             r = client.post(
                 f"{url}/api/chat",
                 json={"model": model, "messages": messages, "stream": False,
-                      "think": thinking, "options": {"temperature": 0.6}},
+                      "think": thinking, "options": _ollama_opts(cfg)},
             )
             r.raise_for_status()
             content = r.json()["message"]["content"]
@@ -254,8 +278,7 @@ def llm_stream(messages: list[dict], cfg: dict | None = None):
             headers["Authorization"] = f"Bearer {cfg['api_key']}"
         with httpx.Client(timeout=600) as client:
             with client.stream("POST", f"{base}/chat/completions", headers=headers,
-                               json={"model": model, "messages": messages,
-                                     "stream": True, "temperature": 0.6}) as r:
+                               json=_openai_payload(cfg, model, messages, True)) as r:
                 r.raise_for_status()
                 for line in r.iter_lines():
                     if not line:
@@ -277,7 +300,7 @@ def llm_stream(messages: list[dict], cfg: dict | None = None):
         with httpx.Client(timeout=600) as client:
             with client.stream("POST", f"{url}/api/chat",
                                json={"model": model, "messages": messages, "stream": True,
-                                     "think": thinking, "options": {"temperature": 0.6}}) as r:
+                                     "think": thinking, "options": _ollama_opts(cfg)}) as r:
                 r.raise_for_status()
                 for line in r.iter_lines():
                     if not line:

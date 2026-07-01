@@ -66,6 +66,11 @@ DEFAULT_SETTINGS = {
     "tts_trim": True,                    # trim edge silence from each chunk
     "tts_gap_ms": 30,                    # consistent gap appended between chunks
     "tts_smoothing": "natural",          # 'natural' | 'verbatim' | 'flowing'
+    # LLM generation controls
+    "llm_temperature": 0.6,              # 0 = deterministic, higher = more varied
+    "llm_top_p": 1.0,                    # nucleus sampling (1 = off)
+    "llm_max_tokens": 0,                 # cap on reply length (0 = model default)
+    "llm_num_ctx": 0,                    # context window, Ollama only (0 = model default)
 }
 # What a POST /settings is allowed to write (api_key handled separately).
 SETTINGS_FIELDS = (
@@ -73,7 +78,11 @@ SETTINGS_FIELDS = (
     "ollama_url", "ollama_model", "openai_base", "openai_model", "configured",
     "tts_voice", "tts_speed",
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
+    "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
 )
+# Numeric settings and their coercion (so JSON strings from the UI store cleanly).
+_FLOAT_FIELDS = {"tts_speed", "llm_temperature", "llm_top_p"}
+_INT_FIELDS = {"tts_gap_ms", "llm_max_tokens", "llm_num_ctx"}
 
 # English Kokoro voices (American 'a' / British 'b'). The first letter is also
 # Kokoro's lang_code, so voice[0] routes pronunciation. Non-English packs are
@@ -142,7 +151,15 @@ def _save_settings(partial: dict) -> dict:
     for k in SETTINGS_FIELDS:
         if k in partial:
             v = partial[k]
-            s[k] = bool(v) if k in ("thinking", "configured") else v
+            if k in ("thinking", "configured"):
+                v = bool(v)
+            elif k in _FLOAT_FIELDS:
+                try: v = float(v)
+                except (TypeError, ValueError): v = DEFAULT_SETTINGS[k]
+            elif k in _INT_FIELDS:
+                try: v = int(float(v))
+                except (TypeError, ValueError): v = DEFAULT_SETTINGS[k]
+            s[k] = v
     _write_json(SETTINGS_FILE, {k: s[k] for k in SETTINGS_FIELDS})
     return s
 
@@ -180,6 +197,11 @@ def _llm_cfg(overrides: dict | None = None) -> dict:
         "ollama_model": o.get("ollama_model", s["ollama_model"]),
         "openai_base": o.get("openai_base", s["openai_base"]),
         "openai_model": o.get("openai_model", s["openai_model"]),
+        # generation controls (map llm_* settings -> the keys llm_complete expects)
+        "temperature": o.get("temperature", s["llm_temperature"]),
+        "top_p": o.get("top_p", s["llm_top_p"]),
+        "max_tokens": o.get("max_tokens", s["llm_max_tokens"]),
+        "num_ctx": o.get("num_ctx", s["llm_num_ctx"]),
     }
     cfg["api_key"] = o.get("api_key") or _get_api_key() or ""
     return cfg
