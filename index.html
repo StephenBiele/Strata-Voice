@@ -121,6 +121,11 @@
   .history-toggle .icon{ font-size:1rem; line-height:1; }
   .history-toggle .label{ font-size:.86rem; }
   .history-toggle.iconbtn{ padding:0; min-width:2.4rem; }
+  .history-toggle.iconbtn svg{ width:1.15rem; height:1.15rem; }
+  /* incognito toggle: "on" state */
+  #incognitoBtn[aria-checked="true"]{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  #incognitoBtn[aria-checked="true"]:hover{ background:var(--ink); color:var(--paper); }
+  body.private .byline{ color:var(--ink-soft); font-weight:600; }
   .calltools{ justify-self:end; display:inline-flex; align-items:center; gap:.5rem; }
   .callmenu-wrap{ position:relative; }
   .callmenu[hidden]{ display:none; }   /* .callmenu sets display:flex, which would otherwise beat [hidden] */
@@ -137,7 +142,11 @@
   .orbwrap{
     position:relative; flex:1; width:100%;
     display:flex; align-items:center; justify-content:center;
+    /* hold-to-talk target: no scroll/select/callout while pressing */
+    touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+    cursor:pointer;
   }
+  .orbwrap.holding{ cursor:grabbing; }
   .cluster{
     position:relative; width:clamp(220px,52vmin,420px); aspect-ratio:1;
     display:flex; align-items:center; justify-content:center;
@@ -793,6 +802,9 @@
         <div class="byline">connected</div>
       </div>
       <div class="calltools">
+        <button class="history-toggle iconbtn" id="incognitoBtn" role="switch" aria-checked="false" aria-label="Incognito — don't save this conversation" title="Incognito — don't save this conversation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13c0-3.3 3.6-6 8-6s8 2.7 8 6v4.5a1.5 1.5 0 0 1-2.4 1.2L15 17.5l-1.8 1.3a2 2 0 0 1-2.4 0L9 17.5l-2.6 1.2A1.5 1.5 0 0 1 4 17.5z"/><circle cx="9.5" cy="12.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="12.5" r="1.1" fill="currentColor" stroke="none"/></svg>
+        </button>
         <div class="callmenu-wrap">
           <button class="history-toggle iconbtn" id="callMenuBtn" aria-haspopup="true" aria-expanded="false" aria-label="Open menu" title="Menu"><span class="icon">⋯</span></button>
           <div class="callmenu" id="callMenu" hidden role="menu">
@@ -1030,6 +1042,7 @@ const orbStage=$("#orbStage");
 const historyToggle=$("#historyToggle"), historyClose=$("#historyClose"), pastChatsDrawerBody=$("#pastChatsDrawerBody");
 const callComposer=$("#callComposer"), callComposerHome=callComposer.parentNode, drawerFoot=$("#drawerFoot");
 let drawerView="current";   // "current" (live) | "history" (browse past chats)
+let incognito=false;        // when on, the conversation isn't saved or remembered
 
 let ac, micStream, micSource, micAnalyser, capNode;
 let playAnalyser=null;
@@ -1074,7 +1087,8 @@ function setState(s){
   orbStage.classList.remove("state-listening","state-thinking","state-speaking");
   if(s!=="idle") orbStage.classList.add("state-"+s);
   document.body.classList.toggle("state-thinking-dots", s==="thinking");
-  const labels={ idle:"hold space to talk", listening:"listening…", thinking:"thinking…", speaking:"speaking" };
+  const idleHint = matchMedia("(pointer:coarse)").matches ? "touch and hold to talk" : "hold space to talk";
+  const labels={ idle:idleHint, listening:"listening…", thinking:"thinking…", speaking:"speaking" };
   statusEl.textContent=labels[s]||"";
 }
 function showCaption(text, who){
@@ -1124,6 +1138,11 @@ function showDrawerView(view){
 }
 async function openDrawerCurrent(){
   drawerView="current"; drawerInChat=true; drawerPending=null;
+  if(incognito){
+    drawerChatId=null;
+    pastChatsDrawerBody.innerHTML='<div class="drawer-empty">👻 Incognito — this conversation isn’t being saved or remembered.</div>';
+    dockComposer(); return;
+  }
   pastChatsDrawerBody.innerHTML='<p class="empty">Loading…</p>';
   let s={}; try{ s=await (await fetch("/session/current")).json(); }catch(_){}
   currentSessionId = s.id || currentSessionId;
@@ -1667,7 +1686,7 @@ function ensureAudio(){
 async function streamChat(text, {speak, onToken, onAudio, onDone, onError}){
   let r;
   try{ r=await fetch("/chat/stream",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({message:text, speak:!!speak})}); }
+        body:JSON.stringify({message:text, speak:!!speak, private:incognito})}); }
   catch(e){ onError&&onError(e); return; }
   const reader=r.body.getReader(); const dec=new TextDecoder(); let sbuf="";
   while(true){
@@ -1750,7 +1769,7 @@ async function endTalk(){
   stopPlayback();
   let gotAudio=false;
   try{
-    const r=await fetch("/turn/stream",{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:wav});
+    const r=await fetch("/turn/stream"+(incognito?"?private=1":""),{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:wav});
     const reader=r.body.getReader(); const dec=new TextDecoder(); let sbuf="";
     while(true){
       const {done,value}=await reader.read();
@@ -1849,6 +1868,15 @@ $("#beginBtn").addEventListener("click", start);
 endBtn.addEventListener("click", end);
 historyToggle.addEventListener("click",()=>setHistoryCollapsed(!call.classList.contains("history-collapsed")));
 historyClose.addEventListener("click",()=>setHistoryCollapsed(true));
+// incognito: this conversation isn't saved or remembered (existing memory is still used)
+const incognitoBtn=$("#incognitoBtn"), bylineEl=document.querySelector("#call .byline");
+incognitoBtn.addEventListener("click",()=>{
+  incognito=!incognito;
+  incognitoBtn.setAttribute("aria-checked", incognito?"true":"false");
+  document.body.classList.toggle("private", incognito);
+  if(bylineEl) bylineEl.textContent = incognito ? "incognito · not saved" : "connected";
+  if(incognito && drawerView==="current") openDrawerCurrent();  // refresh the private note
+});
 $("#segCurrent").addEventListener("click",()=>showDrawerView("current"));
 $("#segHistory").addEventListener("click",()=>showDrawerView("history"));
 // phone bottom sheet: tap outside it to close
@@ -2008,11 +2036,27 @@ fileInput.addEventListener("change", async (e)=>{
 });
 
 // spacebar push-to-talk
+function inTextField(el){ return el && (el.tagName==="INPUT" || el.tagName==="TEXTAREA" || el.isContentEditable); }
+// Space begins the conversation from the landing page (then keeps talking while
+// held), and is push-to-talk once a call is running. Skipped while typing.
+let spaceHeld=false;
+async function spaceStart(){
+  spaceHeld=true;
+  await start();
+  if(spaceHeld && started && !holding) beginTalk();
+}
 window.addEventListener("keydown",(e)=>{
-  if(e.code==="Space" && !e.repeat && started){ e.preventDefault(); beginTalk(); }
+  if(e.code!=="Space" || e.repeat) return;
+  if(inTextField(document.activeElement)) return;   // let spaces type
+  if(started){ e.preventDefault(); beginTalk(); return; }
+  const ae=document.activeElement;                  // only hijack when nothing's focused
+  if(!landing.hidden && (!ae || ae===document.body)){ e.preventDefault(); spaceStart(); }
 });
 window.addEventListener("keyup",(e)=>{
-  if(e.code==="Space" && started){ e.preventDefault(); endTalk(); }
+  if(e.code!=="Space") return;
+  spaceHeld=false;
+  if(inTextField(document.activeElement)) return;
+  if(started){ e.preventDefault(); endTalk(); }
 });
 // pointer push-to-talk (mouse / touch)
 const down=(e)=>{ e.preventDefault(); beginTalk(); };
@@ -2020,6 +2064,28 @@ const up=(e)=>{ e.preventDefault(); endTalk(); };
 pttBtn.addEventListener("pointerdown",down);
 pttBtn.addEventListener("pointerup",up);
 pttBtn.addEventListener("pointerleave",(e)=>{ if(holding) endTalk(); });
+
+// touch/press the orb itself to talk (primary path on mobile, where there's no
+// spacebar). Pointer capture keeps the hold alive even if the finger drifts.
+orbStage.addEventListener("pointerdown",(e)=>{
+  if(!started || busy || holding) return;
+  e.preventDefault();
+  try{ orbStage.setPointerCapture(e.pointerId); }catch(_){}
+  orbStage.classList.add("holding");
+  beginTalk();
+});
+orbStage.addEventListener("pointerup",(e)=>{
+  e.preventDefault(); orbStage.classList.remove("holding");
+  if(holding) endTalk();
+});
+orbStage.addEventListener("pointercancel",()=>{ orbStage.classList.remove("holding"); if(holding) endTalk(); });
+
+// touch devices have no spacebar — reword the landing hint (setState handles the
+// in-call idle label via (pointer:coarse))
+if(matchMedia("(pointer:coarse)").matches){
+  const lh=document.querySelector("#landing .hint");
+  if(lh) lh.innerHTML="Or just <strong>touch and hold</strong> the orb to talk.";
+}
 </script>
 </body>
 </html>

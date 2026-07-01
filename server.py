@@ -570,19 +570,24 @@ def _handle_turn(wav_bytes: bytes) -> dict:
         }
 
 
-def _stream_turn(text: str, *, speak: bool, emit_tokens: bool):
+def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = False):
     """Shared turn core for both voice and text. Runs the full memory + LLM +
     events + session pipeline and yields NDJSON-ready dicts:
       - token deltas ({"type":"token"}) when emit_tokens (text chat),
       - synthesized audio ({"type":"audio"}) when speak (voice, or text+TTS).
-    Modality-agnostic: the only difference upstream is how `text` was obtained."""
-    if _session is None:
+    Modality-agnostic: the only difference upstream is how `text` was obtained.
+
+    When `private` (incognito), the turn leaves no trace: no session/transcript,
+    no episodic event, no memory capture/extraction, no recap. It still READS
+    existing profile + memories for context and keeps ephemeral in-call history."""
+    if not private and _session is None:
         _start_session()
-    _history.append({"role": "user", "content": text})
-    event_id = vc.record_event(_strata, text)     # episodic spine (L0 event)
-    captured = vc.capture_memory(_strata, text, event_id)   # deterministic, no LLM
-    if captured:
-        print("[memory]", captured)
+    _history.append({"role": "user", "content": text})   # ephemeral; not persisted
+    event_id = None if private else vc.record_event(_strata, text)   # episodic spine (L0 event)
+    if not private:
+        captured = vc.capture_memory(_strata, text, event_id)   # deterministic, no LLM
+        if captured:
+            print("[memory]", captured)
 
     s = _settings()
     mem = vc.list_memories(_strata)
@@ -650,32 +655,35 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool):
             if msg:
                 yield msg
 
-    # parse directives from the full reply, persist memory + transcript
+    # parse directives (incognito: apply_directives still strips them from the
+    # spoken text, but nothing is written because private turns emit none and the
+    # persistence/extraction below is skipped)
     reply = vc.apply_directives(_strata, full, mem)
-    _history.append({"role": "assistant", "content": reply})
-    _session["turns"].append({"role": "user", "content": text, "t": time.time()})
-    _session["turns"].append({"role": "assistant", "content": reply, "t": time.time()})
-    if not _session["title"]:
-        _session["title"] = text[:60]
-    _persist_session()
+    _history.append({"role": "assistant", "content": reply})   # ephemeral
 
-    # LLM extraction pass — captures durable facts from natural speech that the
-    # deterministic patterns miss. Runs after the reply, so it never delays output.
-    try:
-        cur = [m["text"] for m in vc.list_memories(_strata)]
-        new_facts = vc.extract_facts_llm(text, cur, _llm_cfg())
-        added = vc.add_facts(_strata, new_facts, event_id)
-        if added:
-            print("[memory] extracted:", added)
-    except Exception as e:
-        print("[memory] extraction error:", e)
+    if not private:
+        _session["turns"].append({"role": "user", "content": text, "t": time.time()})
+        _session["turns"].append({"role": "assistant", "content": reply, "t": time.time()})
+        if not _session["title"]:
+            _session["title"] = text[:60]
+        _persist_session()
+        # LLM extraction pass — captures durable facts from natural speech that the
+        # deterministic patterns miss. Runs after the reply, so it never delays output.
+        try:
+            cur = [m["text"] for m in vc.list_memories(_strata)]
+            new_facts = vc.extract_facts_llm(text, cur, _llm_cfg())
+            added = vc.add_facts(_strata, new_facts, event_id)
+            if added:
+                print("[memory] extracted:", added)
+        except Exception as e:
+            print("[memory] extraction error:", e)
 
     memories = [m["text"] for m in vc.list_memories(_strata)]
     yield {"type": "done", "reply": reply, "memories": memories,
-           "session": _session["id"] if _session else None}
+           "session": (_session["id"] if (_session and not private) else None)}
 
 
-def _handle_turn_stream(wav_bytes: bytes):
+def _handle_turn_stream(wav_bytes: bytes, private: bool = False):
     """Voice streaming turn: transcribe the mic audio, then run the shared core
     with audio synthesis on (and no token stream — the caption rides the audio)."""
     with _lock:
@@ -685,13 +693,14 @@ def _handle_turn_stream(wav_bytes: bytes):
         if not text:
             yield {"type": "empty"}
             return
-        if _session is None:
+        if not private and _session is None:
             _start_session()
-        yield {"type": "meta", "transcript": text, "session": _session["id"]}
-        yield from _stream_turn(text, speak=True, emit_tokens=False)
+        yield {"type": "meta", "transcript": text,
+               "session": (_session["id"] if (_session and not private) else None)}
+        yield from _stream_turn(text, speak=True, emit_tokens=False, private=private)
 
 
-def _handle_chat_stream(text: str, speak: bool):
+def _handle_chat_stream(text: str, speak: bool, private: bool = False):
     """Text streaming turn: same pipeline, fed a typed message. Streams the reply
     as text tokens; also speaks it via TTS when the user opted in."""
     text = (text or "").strip()
@@ -699,10 +708,11 @@ def _handle_chat_stream(text: str, speak: bool):
         if not text:
             yield {"type": "empty"}
             return
-        if _session is None:
+        if not private and _session is None:
             _start_session()
-        yield {"type": "meta", "transcript": text, "session": _session["id"]}
-        yield from _stream_turn(text, speak=speak, emit_tokens=True)
+        yield {"type": "meta", "transcript": text,
+               "session": (_session["id"] if (_session and not private) else None)}
+        yield from _stream_turn(text, speak=speak, emit_tokens=True, private=private)
 
 
 # ---- recall eval -------------------------------------------------------------
@@ -916,12 +926,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, result)
         if u.path == "/turn/stream":
             wav = self._body()
+            private = parse_qs(u.query).get("private", ["0"])[0] in ("1", "true")
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             try:
-                for line in _handle_turn_stream(wav):
+                for line in _handle_turn_stream(wav, private):
                     self.wfile.write((json.dumps(line) + "\n").encode("utf-8"))
                     self.wfile.flush()
             except Exception as e:
@@ -937,12 +948,13 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self._body() or b"{}")
             msg = str(body.get("message", ""))
             speak = bool(body.get("speak", False))
+            private = bool(body.get("private", False))
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             try:
-                for line in _handle_chat_stream(msg, speak):
+                for line in _handle_chat_stream(msg, speak, private):
                     self.wfile.write((json.dumps(line) + "\n").encode("utf-8"))
                     self.wfile.flush()
             except Exception as e:
