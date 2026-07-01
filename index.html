@@ -1066,7 +1066,7 @@ const callComposer=$("#callComposer"), callComposerHome=callComposer.parentNode,
 let drawerView="current";   // "current" (live) | "history" (browse past chats)
 let incognito=false;        // when on, the conversation isn't saved or remembered
 
-let ac, micStream, micSource, micAnalyser, capNode;
+let ac, micStream, micSource, micAnalyser, capNode, micToken=0;
 let playAnalyser=null;
 let captured=[];          // Float32 chunks while holding
 let holding=false, busy=false, started=false;
@@ -1209,18 +1209,19 @@ function dockComposer(){
 async function start(){
   if(started) return;
   ac = new (window.AudioContext||window.webkitAudioContext)();
+  // Ask for mic permission NOW (during the Start-conversation transition) so the
+  // first hold-to-talk works instantly with no prompt. We release it right away —
+  // the mic is only truly opened while you hold (acquireMic/releaseMic), so the OS
+  // indicator shows only while you're actually speaking. Skip if already granted
+  // (avoids briefly flashing the mic on later calls).
   try{
-    micStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-  }catch(e){ alert("Microphone access is needed to talk. Please allow it and reload."); return; }
-  micSource = ac.createMediaStreamSource(micStream);
-  micAnalyser = ac.createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=.75;
-  micSource.connect(micAnalyser);
-
-  // capture node (collects samples only while holding)
-  capNode = ac.createScriptProcessor(4096,1,1);
-  capNode.onaudioprocess = (e)=>{ if(holding) captured.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
-  micSource.connect(capNode); capNode.connect(ac.destination); // destination keeps node alive (we mute via 0 output)
-
+    let perm="prompt";
+    try{ perm=(await navigator.permissions.query({name:"microphone"})).state; }catch(_){}
+    if(perm!=="granted"){
+      const s=await navigator.mediaDevices.getUserMedia({audio:true});
+      s.getTracks().forEach(t=>t.stop());
+    }
+  }catch(e){ /* denied or unsupported — holding will surface the prompt/alert as before */ }
   started=true;
   await fetch("/reset",{method:"POST"});
   currentSessionId=null; drawerView="current";   // fresh call defaults to the live view
@@ -1235,7 +1236,7 @@ function tickTimer(){
 }
 function end(){
   stopPlayback();
-  if(micStream) micStream.getTracks().forEach(t=>t.stop());
+  releaseMic();
   if(ac) ac.close();
   clearInterval(timerInt);
   started=false; holding=false; busy=false;
@@ -1686,13 +1687,39 @@ async function loadFiles(){
 }
 
 /* ---------- push to talk ---------- */
-function beginTalk(){
+// Open the mic (only while holding to talk). Returns false if permission denied.
+async function acquireMic(){
+  try{
+    micStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  }catch(e){ alert("Microphone access is needed to talk. Please allow it in your browser."); return false; }
+  micSource = ac.createMediaStreamSource(micStream);
+  micAnalyser = ac.createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=.75;
+  micSource.connect(micAnalyser);
+  capNode = ac.createScriptProcessor(4096,1,1);
+  capNode.onaudioprocess = (e)=>{ if(holding) captured.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  micSource.connect(capNode); capNode.connect(ac.destination); // silent output; keeps the node processing
+  return true;
+}
+// Fully release the mic device so the OS indicator turns off between utterances.
+function releaseMic(){
+  try{ if(capNode){ capNode.onaudioprocess=null; capNode.disconnect(); } }catch(_){}
+  try{ if(micSource) micSource.disconnect(); }catch(_){}
+  try{ if(micAnalyser) micAnalyser.disconnect(); }catch(_){}
+  try{ if(micStream) micStream.getTracks().forEach(t=>t.stop()); }catch(_){}
+  capNode=micSource=micAnalyser=micStream=null;
+}
+async function beginTalk(){
   if(!started || holding || busy) return;
   stopPlayback();                 // barge-in: cut any current/queued speech
   holding=true; captured=[];
+  const t=++micToken;
   pttBtn.classList.add("active"); pttLabel.textContent="Listening…";
   setState("listening");
   if(ac.state==="suspended") ac.resume();
+  const ok=await acquireMic();
+  if(!ok){ holding=false; pttBtn.classList.remove("active"); pttLabel.textContent="Hold to talk"; setState("idle"); return; }
+  // released mid-acquisition (quick tap) — drop the stream we just opened
+  if(t!==micToken || !holding){ releaseMic(); }
 }
 
 /* ---------- streaming playback (gapless chunk queue) ---------- */
@@ -1812,9 +1839,11 @@ async function sendCallChat(){
 
 async function endTalk(){
   if(!holding) return;
-  holding=false;
+  holding=false; micToken++;
+  const rate = (ac && ac.sampleRate) || 48000;
+  releaseMic();                   // stop the device now → OS mic indicator turns off
   pttBtn.classList.remove("active"); pttLabel.textContent="Hold to talk";
-  const wav = encodeWAV(flatten(captured), ac.sampleRate, 16000);
+  const wav = encodeWAV(flatten(captured), rate, 16000);
   captured=[];
   if(wav.byteLength < 4000){ setState("idle"); return; } // too short
   busy=true; pttBtn.disabled=true; setState("thinking");
