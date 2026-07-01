@@ -71,6 +71,9 @@ DEFAULT_SETTINGS = {
     "llm_top_p": 1.0,                    # nucleus sampling (1 = off)
     "llm_max_tokens": 0,                 # cap on reply length (0 = model default)
     "llm_num_ctx": 0,                    # context window, Ollama only (0 = model default)
+    # Speech recognition (what turns your voice into text)
+    "asr_model": vc.ASR_MODEL,           # HF model id
+    "asr_backend": vc.ASR_BACKEND,       # 'mlx-audio' | 'parakeet-mlx'
 }
 # What a POST /settings is allowed to write (api_key handled separately).
 SETTINGS_FIELDS = (
@@ -79,7 +82,33 @@ SETTINGS_FIELDS = (
     "tts_voice", "tts_speed",
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
+    "asr_model", "asr_backend",
 )
+
+# Speech-recognition model catalog. Each entry is a (model id + loader backend)
+# combo with a plain-language name and one-line blurb, so the picker reads for
+# humans. All ids are verified to exist on Hugging Face; a pick that still fails
+# to load is caught and reverted (see _reload_asr), so it can't brick a call.
+ASR_MODELS = [
+    {"id": "parakeet", "model": "mlx-community/parakeet-tdt-0.6b-v3", "backend": "mlx-audio",
+     "label": "Parakeet — balanced (recommended)",
+     "blurb": "Fast and accurate for English. The default."},
+    {"id": "parakeet-classic", "model": "mlx-community/parakeet-tdt-0.6b-v3", "backend": "parakeet-mlx",
+     "label": "Parakeet — classic loader",
+     "blurb": "The same model through the original loader — for A/B comparison."},
+    {"id": "whisper-turbo", "model": "openai/whisper-large-v3-turbo", "backend": "mlx-audio",
+     "label": "Whisper Turbo — best for accents & other languages",
+     "blurb": "Handles strong accents and ~100 languages. Heaviest; first load is slow."},
+    {"id": "whisper-small", "model": "openai/whisper-small", "backend": "mlx-audio",
+     "label": "Whisper Small — lighter, multilingual",
+     "blurb": "A lighter Whisper. A good all-rounder across many languages."},
+    {"id": "whisper-tiny", "model": "openai/whisper-tiny", "backend": "mlx-audio",
+     "label": "Whisper Tiny — fastest, roughest",
+     "blurb": "Tiny and quick, least accurate. Handy for snappy testing."},
+    {"id": "qwen3-asr", "model": "mlx-community/Qwen3-ASR-0.6B-4bit", "backend": "mlx-audio",
+     "label": "Qwen3-ASR — newest, multilingual (experimental)",
+     "blurb": "A newer multilingual model. Experimental; first load can be slow."},
+]
 # Numeric settings and their coercion (so JSON strings from the UI store cleanly).
 _FLOAT_FIELDS = {"tts_speed", "llm_temperature", "llm_top_p"}
 _INT_FIELDS = {"tts_gap_ms", "llm_max_tokens", "llm_num_ctx"}
@@ -115,6 +144,7 @@ DOC_TOTAL_CAP = 16000        # across all docs
 
 # Loaded once at startup.
 _asr = None
+_asr_key = None     # (model, backend) currently loaded into _asr, for change detection
 _tts = None
 _strata = None
 _embedder = None    # real embedding model if available, else None (dump-all recall)
@@ -208,14 +238,21 @@ def _llm_cfg(overrides: dict | None = None) -> dict:
 
 
 def _load_models() -> None:
-    global _asr, _tts, _strata, _embedder
+    global _asr, _asr_key, _tts, _strata, _embedder
     print("Loading models (first run downloads them)…")
-    import parakeet_mlx
     from mlx_audio.tts.utils import load_model
     from strata.gateway.api import Strata
 
     STORE.mkdir(parents=True, exist_ok=True)
-    _asr = parakeet_mlx.from_pretrained(vc.ASR_MODEL)
+    # Honor the saved speech-recognition choice; fall back to the default if that
+    # model can't load, so a bad saved pick never blocks startup.
+    s = _settings()
+    want = (s.get("asr_model") or vc.ASR_MODEL, s.get("asr_backend") or vc.ASR_BACKEND)
+    try:
+        _asr = vc.load_asr(model=want[0], backend=want[1]); _asr_key = want
+    except Exception as e:
+        print(f"[asr] saved model {want} failed to load ({e}); using default")
+        _asr = vc.load_asr(); _asr_key = (vc.ASR_MODEL, vc.ASR_BACKEND)
     _tts = load_model(vc.TTS_MODEL)
     vc.patch_kokoro_tts()
     Path(vc.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -225,7 +262,49 @@ def _load_models() -> None:
         n = vc.warm_index(_strata)
         print(f"  · warmed vector index with {n} memor{'y' if n==1 else 'ies'}")
     _backfill_events()
-    print(f"Ready · LLM={vc.LLM_MODEL} · ASR=Parakeet-V3 · TTS=Kokoro · DB={vc.DB_PATH}")
+    print(f"Ready · LLM={vc.LLM_MODEL} · ASR={_asr_label(_asr_key)} · "
+          f"TTS=Kokoro · DB={vc.DB_PATH}")
+
+
+def _asr_label(key) -> str:
+    """Friendly catalog label for a loaded (model, backend), or the raw id."""
+    if not key:
+        return "?"
+    for m in ASR_MODELS:
+        if (m["model"], m["backend"]) == tuple(key):
+            return m["label"].split(" — ")[0] + f" ({key[1]})"
+    return f"{key[0]} ({key[1]})"
+
+
+_ASR_PROBE = None
+
+
+def _asr_smoke(asr) -> None:
+    """Run a tiny silent clip through the model. Some models load fine but fail at
+    transcribe time (e.g. missing HF processor), so this proves it actually runs
+    before we commit the swap. Raises if the model can't transcribe."""
+    global _ASR_PROBE
+    if _ASR_PROBE is None:
+        _ASR_PROBE = str(HERE / ".asr_probe.wav")
+        sf.write(_ASR_PROBE, np.zeros(8000, dtype="float32"), 16000)
+    asr.transcribe(_ASR_PROBE)
+
+
+def _reload_asr(model: str, backend: str):
+    """Swap the live ASR model. Returns None on success, else an error string.
+    Fail-safe: the new model must both load AND pass a smoke transcription before
+    it replaces the current one — so a bad pick can never brick a real call; the
+    picker just reports what went wrong and keeps the working model."""
+    global _asr, _asr_key
+    try:
+        new = vc.load_asr(model=model, backend=backend)
+        _asr_smoke(new)
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    _asr = new
+    _asr_key = (model, backend)
+    print(f"[asr] switched to {backend}:{model}")
+    return None
 
 
 def _backfill_events() -> None:
@@ -832,6 +911,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, out)
         if u.path == "/voices":
             return self._json(200, {"voices": _voice_list()})
+        if u.path == "/asr/models":
+            cur = _asr_key or (_settings()["asr_model"], _settings()["asr_backend"])
+            return self._json(200, {"models": ASR_MODELS,
+                                    "current": {"model": cur[0], "backend": cur[1]}})
         if u.path == "/ollama/models":
             url = (parse_qs(u.query).get("url", [None])[0] or _settings()["ollama_url"]).rstrip("/")
             try:
@@ -912,8 +995,22 @@ class Handler(BaseHTTPRequestHandler):
             # API key → keychain only; never persisted to settings.json.
             if "api_key" in body:
                 _set_api_key((body.get("api_key") or "").strip())
+            # Speech-recognition model swap: eager + fail-safe. Only reload if the
+            # pick actually changed; if the new model won't load, keep the current
+            # one and don't persist the broken choice.
+            asr_error = None
+            if "asr_model" in body or "asr_backend" in body:
+                cur = _settings()
+                want = (body.get("asr_model") or cur["asr_model"],
+                        body.get("asr_backend") or cur["asr_backend"])
+                if _asr_key is None or tuple(_asr_key) != want:
+                    with _lock:
+                        asr_error = _reload_asr(want[0], want[1])
+                    if asr_error:
+                        body.pop("asr_model", None)
+                        body.pop("asr_backend", None)
             _save_settings(body)
-            return self._json(200, {"ok": True})
+            return self._json(200, {"ok": asr_error is None, "asr_error": asr_error})
         if u.path == "/tts/preview":
             body = json.loads(self._body() or b"{}")
             st = _settings()

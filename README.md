@@ -24,9 +24,11 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
 - **Or just type.** Prefer not to talk? "Send a message instead" opens a text chat
   (replies stream in, optionally spoken aloud). Typed and spoken turns share the same
   session, memory, and timeline — switch freely.
-- **On-device speech.** [`parakeet-mlx`](https://github.com/senstella/parakeet-mlx)
-  for ASR and [Kokoro via `mlx-audio`](https://github.com/Blaizzy/mlx-audio) for
-  TTS, both running on Apple's MLX. Fast and private.
+- **On-device speech.** Both ASR (Parakeet V3 TDT) and TTS (Kokoro) run through
+  [`mlx-audio`](https://github.com/Blaizzy/mlx-audio) on Apple's MLX — one library,
+  one loader, and the foundation for future VAD/streaming. Fast and private.
+  (The original [`parakeet-mlx`](https://github.com/senstella/parakeet-mlx) loader
+  is still available via `VOICE_ASR_BACKEND=parakeet-mlx` for A/B comparison.)
 - **Real memory.** Backed by Strata Memory: durable facts, supersession (updating
   a fact keeps history), semantic recall, and canonical-first deletion (forgetting
   actually forgets). Conversations even carry over ("what were we just talking about?").
@@ -56,10 +58,12 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
 - **Reasoning indicator** — with reasoning models, a live "reasoning… · 12s" timer so a
   long think-chain never looks frozen.
 - **Settings** — assistant name, system prompt, "thinking" toggle, model backend,
-  **LLM controls** (temperature, top-p, max tokens, and context window for Ollama), and
+  **LLM controls** (temperature, top-p, max tokens, and context window for Ollama),
   **voice cadence** (chunking: sentence / clause / hybrid / whole, edge-silence trimming,
   inter-chunk gap, punctuation smoothing) — all A/B-able via the voice Preview with your
-  own preview text.
+  own preview text — and a **Speech recognition** picker to switch the ASR model live
+  (Parakeet, Whisper Tiny/Small/Turbo, Qwen3-ASR). Switching swaps the model on the
+  fly; a pick that can't load is caught and the previous model is kept.
 - **Provider-agnostic** — Quick (local Ollama, pick or paste any model) or Advanced
   (any OpenAI-compatible endpoint + key). API keys are stored in the **macOS
   Keychain**, never on disk.
@@ -125,6 +129,8 @@ Most things are set in the **Settings** page, but a few startup options are env 
 | `VOICE_PORT` | `8765` | web server port |
 | `VOICE_NAME` | `Sage` | initial assistant name (also editable in Settings) |
 | `VOICE_LLM_MODEL` | `qwen3.5:4b` | default Ollama model |
+| `VOICE_ASR_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | ASR model id (any mlx-audio STT model: `whisper`, `qwen3_asr`, `moonshine`, …) |
+| `VOICE_ASR_BACKEND` | `mlx-audio` | ASR loader: `mlx-audio` (unified stack) or `parakeet-mlx` (standalone, for A/B) |
 | `OLLAMA_URL` | `http://localhost:11434` | URL endpoint for local Ollama server |
 
 ## How memory works

@@ -36,6 +36,11 @@ import soundfile as sf
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 LLM_MODEL = os.environ.get("VOICE_LLM_MODEL", "qwen3.5:4b")
 ASR_MODEL = os.environ.get("VOICE_ASR_MODEL", "mlx-community/parakeet-tdt-0.6b-v3")
+# ASR backend. "mlx-audio" (default) loads the model through mlx-audio's STT
+# stack — same package as the Kokoro TTS, one dependency, and the foundation for
+# future VAD/streaming (mlx_audio.vad, realtime_vad). "parakeet-mlx" keeps
+# senstella's standalone loader, for A/B'ing latency/accuracy against the old path.
+ASR_BACKEND = os.environ.get("VOICE_ASR_BACKEND", "mlx-audio").strip().lower()
 TTS_MODEL = os.environ.get("VOICE_TTS_MODEL", "prince-canuma/Kokoro-82M")
 TTS_VOICE = os.environ.get("VOICE_TTS_VOICE", "af_heart")
 DB_PATH = os.environ.get("VOICE_DB", str(Path.home() / ".vui" / "strata_memory.db"))
@@ -155,6 +160,33 @@ def patch_kokoro_tts() -> None:
         print("[tts] applied Kokoro SineGen length-alignment patch")
     except Exception as e:
         print(f"[tts] could not patch Kokoro ({e}); long sentences may fail")
+
+
+# ---- ASR ---------------------------------------------------------------------
+class _ASR:
+    """Uniform ASR wrapper so call sites use `asr.transcribe(path).text`
+    regardless of backend. mlx-audio's ParakeetTDT exposes `.generate()` (returns
+    an AlignedResult with `.text`); senstella's parakeet-mlx exposes `.transcribe()`
+    directly. Both load the same Parakeet-V3 model id by default."""
+
+    def __init__(self, backend: str, model):
+        self.backend = backend
+        self._model = model
+
+    def transcribe(self, path):
+        if self.backend == "parakeet-mlx":
+            return self._model.transcribe(str(path))
+        return self._model.generate(str(path))
+
+
+def load_asr(model: str = ASR_MODEL, backend: str = ASR_BACKEND) -> _ASR:
+    """Load the ASR model for the configured backend and return an `_ASR` wrapper.
+    Defaults to mlx-audio; set VOICE_ASR_BACKEND=parakeet-mlx for the old loader."""
+    if backend == "parakeet-mlx":
+        import parakeet_mlx
+        return _ASR("parakeet-mlx", parakeet_mlx.from_pretrained(model))
+    from mlx_audio.stt.utils import load_model as _load_stt
+    return _ASR("mlx-audio", _load_stt(model))
 
 
 # ---- LLM ---------------------------------------------------------------------
@@ -972,16 +1004,16 @@ def judge_recall(facts: list[str], answer: str, cfg: dict | None = None) -> list
 # ---- main loop ---------------------------------------------------------------
 def main() -> int:
     print("Loading models (first run downloads them)...")
-    import parakeet_mlx
     from mlx_audio.tts.utils import load_model
     from strata.gateway.api import Strata
 
-    asr = parakeet_mlx.from_pretrained(ASR_MODEL)
+    asr = load_asr()
     tts = load_model(TTS_MODEL)
     patch_kokoro_tts()
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     strata = Strata.open(db_path=DB_PATH)
-    print(f"Ready. LLM={LLM_MODEL}  ASR=Parakeet-V3  TTS=Kokoro  DB={DB_PATH}")
+    print(f"Ready. LLM={LLM_MODEL}  ASR=Parakeet-V3 ({ASR_BACKEND})  "
+          f"TTS=Kokoro  DB={DB_PATH}")
 
     mem = list_memories(strata)
     if mem:
