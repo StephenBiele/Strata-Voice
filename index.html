@@ -1104,11 +1104,27 @@ function makeBubble(role, text){
 }
 function bubbleSetText(b, text){ const s=b.querySelector(".btext"); if(s) s.textContent=text; }
 
+let thinkStart=0, thinkTimer=null, reasoningActive=false;
+function paintThinking(){
+  const secs=Math.floor((Date.now()-thinkStart)/1000);
+  const word=reasoningActive ? "reasoning" : "thinking";
+  // show the elapsed count only after 2s, so quick turns don't flicker a timer
+  statusEl.textContent = word + "…" + (secs>=2 ? " · "+secs+"s" : "");
+}
+function startThinkClock(){
+  reasoningActive=false; thinkStart=Date.now();
+  clearInterval(thinkTimer); paintThinking();
+  thinkTimer=setInterval(paintThinking, 500);
+}
+function stopThinkClock(){ clearInterval(thinkTimer); thinkTimer=null; }
+function markReasoning(){ reasoningActive=true; if(thinkTimer) paintThinking(); }
 function setState(s){
   state=s;
   orbStage.classList.remove("state-listening","state-thinking","state-speaking");
   if(s!=="idle") orbStage.classList.add("state-"+s);
   document.body.classList.toggle("state-thinking-dots", s==="thinking");
+  if(s==="thinking"){ startThinkClock(); return; }   // clock owns the label while thinking
+  stopThinkClock();
   const idleHint = matchMedia("(pointer:coarse)").matches ? "touch and hold to talk" : "press and hold to talk";
   const labels={ idle:idleHint, listening:"listening…", thinking:"thinking…", speaking:"speaking" };
   statusEl.textContent=labels[s]||"";
@@ -1716,7 +1732,7 @@ function ensureAudio(){
   if(!ac) ac = new (window.AudioContext||window.webkitAudioContext)();
   if(ac.state==="suspended") ac.resume();
 }
-async function streamChat(text, {speak, onToken, onAudio, onDone, onError}){
+async function streamChat(text, {speak, onToken, onAudio, onDone, onError, onReasoning}){
   let r;
   try{ r=await fetch("/chat/stream",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({message:text, speak:!!speak, private:incognito})}); }
@@ -1733,6 +1749,7 @@ async function streamChat(text, {speak, onToken, onAudio, onDone, onError}){
       let m; try{ m=JSON.parse(line); }catch(_){ continue; }
       if(m.type==="token") onToken&&onToken(m.text);
       else if(m.type==="audio") onAudio&&onAudio(m.audio);
+      else if(m.type==="reasoning") onReasoning&&onReasoning();
       else if(m.type==="done") onDone&&onDone(m);
       else if(m.type==="error") onError&&onError(new Error(m.error||"error"));
     }
@@ -1764,6 +1781,7 @@ async function sendTextChat(){
   let acc="";
   await streamChat(text, {
     speak,
+    onReasoning:()=>{ if(!acc) bubbleSetText(a, "Reasoning…"); },
     onToken:(t)=>{ acc+=t; bubbleSetText(a, acc); log.scrollTop=log.scrollHeight; },
     onAudio:(b64)=>{ enqueueChunk(b64); },
     onDone:(m)=>{ bubbleSetText(a, m.reply||acc||"…"); a.classList.remove("streaming");
@@ -1781,6 +1799,7 @@ async function sendCallChat(){
   let gotAudio=false, acc="";
   await streamChat(text, {
     speak:true,
+    onReasoning:()=>{ markReasoning(); },
     onToken:(t)=>{ acc+=t; },
     onAudio:(b64)=>{ gotAudio=true; enqueueChunk(b64); },
     onDone:(m)=>{ streamDone=true; currentSessionId=m.session||currentSessionId;
@@ -1819,6 +1838,7 @@ async function endTalk(){
           lastUserText=msg.transcript||"";
           drawerAppendUserPending(lastUserText);   // your line + "finishing" dots
         }
+        else if(msg.type==="reasoning"){ markReasoning(); }
         else if(msg.type==="audio"){ gotAudio=true; await enqueueChunk(msg.audio); }
         else if(msg.type==="done"){
           currentSessionId=msg.session||currentSessionId;

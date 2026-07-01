@@ -630,6 +630,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
+    reasoned = False   # have we told the client the model is reasoning (thinking, no output yet)?
 
     def _emit(seg: str):
         nonlocal seq
@@ -645,6 +646,12 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         for tok in vc.llm_stream(messages, _llm_cfg()):
             full += tok
             clean = _spoken_region(full)   # strips [MEM_*] directives + <think>
+            # tokens are arriving but nothing speakable yet -> the model is
+            # reasoning (inside <think>); tell the client once so it can show
+            # "reasoning…" instead of looking frozen.
+            if not reasoned and full.strip() and not clean.strip():
+                reasoned = True
+                yield {"type": "reasoning"}
             if emit_tokens and len(clean) > emitted_tok:
                 yield {"type": "token", "text": clean[emitted_tok:]}
                 emitted_tok = len(clean)
