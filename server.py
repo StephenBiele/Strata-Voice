@@ -225,6 +225,44 @@ def _backfill_events() -> None:
         print(f"  · backfilled {n} past turn{'s' if n != 1 else ''} into the timeline")
 
 
+def _backfill_recaps() -> None:
+    """Background, one-time: generate a conversation recap for recent past sessions
+    that lack one, so cross-conversation recall works even for sessions that never
+    reached finalize (abrupt stop / pre-feature). Uses its own Strata connection
+    (the DB is WAL, so concurrent connections are safe; recap vectors are unused —
+    relevant_recaps re-embeds the recap text via the live embedder). The slow
+    summary LLM calls run off the lock so they never delay turns or startup."""
+    try:
+        from strata.gateway.api import Strata
+        todo = [s for s in _read_json(SESSIONS_FILE, []) if s.get("turns") and not s.get("summary")]
+        todo = sorted(todo, key=lambda s: s.get("started_at", 0))[-12:]
+        if not todo:
+            return
+        bf = Strata.open(db_path=vc.DB_PATH)   # default embedder; we only need the canonical write
+        done = 0
+        try:
+            for s in todo:
+                recap = vc.summarize_session(s["turns"], _llm_cfg())   # slow LLM, off-lock
+                if not recap:
+                    continue
+                ts = s.get("ended_at") or s.get("started_at")
+                ts_ms = int(ts * 1000) if isinstance(ts, (int, float)) else None
+                with _lock:                                            # brief: sqlite write + json
+                    vc.record_summary(bf, recap, ts_ms=ts_ms)
+                    cur = _read_json(SESSIONS_FILE, [])
+                    for c in cur:
+                        if c.get("id") == s.get("id"):
+                            c["summary"] = recap
+                    _write_json(SESSIONS_FILE, cur)
+                done += 1
+        finally:
+            bf.close()
+        if done:
+            print(f"  · backfilled {done} conversation recap{'s' if done != 1 else ''}")
+    except Exception as e:
+        print(f"[recap] backfill failed: {e}")
+
+
 # ---- speech synthesis --------------------------------------------------------
 def _for_speech(text: str, mode: str = "natural") -> str:
     """Punctuation pass before synthesis — Kokoro pauses on punctuation, so this
@@ -633,7 +671,8 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool):
         print("[memory] extraction error:", e)
 
     memories = [m["text"] for m in vc.list_memories(_strata)]
-    yield {"type": "done", "reply": reply, "memories": memories}
+    yield {"type": "done", "reply": reply, "memories": memories,
+           "session": _session["id"] if _session else None}
 
 
 def _handle_turn_stream(wav_bytes: bytes):
@@ -646,7 +685,9 @@ def _handle_turn_stream(wav_bytes: bytes):
         if not text:
             yield {"type": "empty"}
             return
-        yield {"type": "meta", "transcript": text}
+        if _session is None:
+            _start_session()
+        yield {"type": "meta", "transcript": text, "session": _session["id"]}
         yield from _stream_turn(text, speak=True, emit_tokens=False)
 
 
@@ -658,7 +699,9 @@ def _handle_chat_stream(text: str, speak: bool):
         if not text:
             yield {"type": "empty"}
             return
-        yield {"type": "meta", "transcript": text}
+        if _session is None:
+            _start_session()
+        yield {"type": "meta", "transcript": text, "session": _session["id"]}
         yield from _stream_turn(text, speak=speak, emit_tokens=True)
 
 
@@ -788,6 +831,11 @@ class Handler(BaseHTTPRequestHandler):
             } for s in sessions if s["turns"]]
             out.sort(key=lambda s: s["started_at"], reverse=True)
             return self._json(200, {"sessions": out})
+        if u.path == "/session/current":
+            # the live conversation (for the sidebar's "Current" view)
+            if _session and _session.get("turns"):
+                return self._json(200, {"id": _session["id"], "turns": _session["turns"]})
+            return self._json(200, {"id": _session["id"] if _session else None, "turns": []})
         if u.path == "/session":
             sid = parse_qs(u.query).get("id", [""])[0]
             sessions = _read_json(SESSIONS_FILE, [])
@@ -988,6 +1036,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     _load_models()
+    # Recap any past conversations missing a summary, in the background so the slow
+    # summary LLM calls never delay startup or the first turn.
+    threading.Thread(target=_backfill_recaps, name="recap-backfill", daemon=True).start()
     srv = HTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
     print(f"\n  ✦ {ASSISTANT_NAME} is listening at {url}")
