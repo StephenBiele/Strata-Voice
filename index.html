@@ -779,12 +779,12 @@
   <!-- LANDING -->
   <section class="view" id="landing">
     <div class="wordmark">{{ASSISTANT_NAME}}</div>
-    <p class="tagline">Your private, on-device voice companion — that <em>remembers</em>.</p>
+    <p class="tagline">Your private, on-device voice companion that <em>remembers</em>.</p>
     <button class="begin" id="beginBtn">
       <svg class="micico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg>
       Start conversation
     </button>
-    <p class="hint">Or, to begin instantly: hold <kbd>Space</kbd> to talk.</p>
+    <p class="hint">Press and hold the orb (or the button) to talk.</p>
     <button class="textlink" id="beginChatBtn">Send a message instead</button>
     <nav class="landingnav">
       <button data-view="memory">Memory</button><span>·</span>
@@ -836,7 +836,7 @@
 
     <div style="display:flex;flex-direction:column;align-items:center;gap:1.1rem;width:100%;">
       <div class="statusrow">
-        <div class="statuslabel" id="status" aria-live="polite">tap and hold space</div>
+        <div class="statuslabel" id="status" aria-live="polite">press and hold to talk</div>
         <span class="thinking-dots" id="thinkingDots" aria-hidden="true"><i></i><i></i><i></i></span>
       </div>
       <p class="caption" id="caption" aria-live="polite"></p>
@@ -1087,7 +1087,7 @@ function setState(s){
   orbStage.classList.remove("state-listening","state-thinking","state-speaking");
   if(s!=="idle") orbStage.classList.add("state-"+s);
   document.body.classList.toggle("state-thinking-dots", s==="thinking");
-  const idleHint = matchMedia("(pointer:coarse)").matches ? "touch and hold to talk" : "hold space to talk";
+  const idleHint = matchMedia("(pointer:coarse)").matches ? "touch and hold to talk" : "press and hold to talk";
   const labels={ idle:idleHint, listening:"listening…", thinking:"thinking…", speaking:"speaking" };
   statusEl.textContent=labels[s]||"";
 }
@@ -2035,38 +2035,16 @@ fileInput.addEventListener("change", async (e)=>{
   e.target.value=""; loadFiles();
 });
 
-// spacebar push-to-talk
-function inTextField(el){ return el && (el.tagName==="INPUT" || el.tagName==="TEXTAREA" || el.isContentEditable); }
-// Space begins the conversation from the landing page (then keeps talking while
-// held), and is push-to-talk once a call is running. Skipped while typing.
-let spaceHeld=false;
-async function spaceStart(){
-  spaceHeld=true;
-  await start();
-  if(spaceHeld && started && !holding) beginTalk();
-}
-window.addEventListener("keydown",(e)=>{
-  if(e.code!=="Space" || e.repeat) return;
-  if(inTextField(document.activeElement)) return;   // let spaces type
-  if(started){ e.preventDefault(); beginTalk(); return; }
-  const ae=document.activeElement;                  // only hijack when nothing's focused
-  if(!landing.hidden && (!ae || ae===document.body)){ e.preventDefault(); spaceStart(); }
-});
-window.addEventListener("keyup",(e)=>{
-  if(e.code!=="Space") return;
-  spaceHeld=false;
-  if(inTextField(document.activeElement)) return;
-  if(started){ e.preventDefault(); endTalk(); }
-});
-// pointer push-to-talk (mouse / touch)
+// pointer push-to-talk (mouse / touch) — the keyboard is left entirely free for
+// typing; talking is holding the orb or the "Hold to talk" button
 const down=(e)=>{ e.preventDefault(); beginTalk(); };
 const up=(e)=>{ e.preventDefault(); endTalk(); };
 pttBtn.addEventListener("pointerdown",down);
 pttBtn.addEventListener("pointerup",up);
 pttBtn.addEventListener("pointerleave",(e)=>{ if(holding) endTalk(); });
 
-// touch/press the orb itself to talk (primary path on mobile, where there's no
-// spacebar). Pointer capture keeps the hold alive even if the finger drifts.
+// touch/press the orb itself to talk (the primary talk affordance). Pointer
+// capture keeps the hold alive even if the finger drifts off the orb.
 orbStage.addEventListener("pointerdown",(e)=>{
   if(!started || busy || holding) return;
   e.preventDefault();
@@ -2079,13 +2057,6 @@ orbStage.addEventListener("pointerup",(e)=>{
   if(holding) endTalk();
 });
 orbStage.addEventListener("pointercancel",()=>{ orbStage.classList.remove("holding"); if(holding) endTalk(); });
-
-// touch devices have no spacebar — reword the landing hint (setState handles the
-// in-call idle label via (pointer:coarse))
-if(matchMedia("(pointer:coarse)").matches){
-  const lh=document.querySelector("#landing .hint");
-  if(lh) lh.innerHTML="Or just <strong>touch and hold</strong> the orb to talk.";
-}
 </script>
 </body>
 </html>
