@@ -632,6 +632,8 @@
     opacity:0; transition:opacity .15s var(--ease), color .15s var(--ease), background .15s var(--ease); }
   .bubble.user .copybtn{ background:oklch(0.90 0.05 130 / .9); color:oklch(0.30 0.05 135); }
   .bubble:hover .copybtn, .copybtn:focus-visible{ opacity:1; }
+  /* no copy button until the reply is fully written */
+  .bubble.streaming .copybtn, .bubble.pending .copybtn{ display:none; }
   .copybtn:hover{ color:var(--ink); }
   .copybtn.copied{ color:var(--sage-deep); }
   .copybtn svg{ width:.85rem; height:.85rem; }
@@ -962,6 +964,10 @@
         <label>Speed · <span class="speedval" id="set_speedval">1.0×</span></label>
         <input type="range" id="set_speed" class="slider" min="0.6" max="1.6" step="0.05" value="1.0">
       </div>
+      <div class="field"><label>Microphone</label>
+        <select id="set_micdev" class="select"><option value="">System default</option></select>
+        <div class="hint">Which input device to record from. Takes effect the next time the mic opens.</div>
+      </div>
 
       <h3 class="subhead">Cadence (experimental)</h3>
       <p class="hint" style="margin:-.4rem 0 1rem">Speech rhythm and pacing.</p>
@@ -1207,6 +1213,7 @@ let pendingStartMs=null;    // detector ms of the current utterance's start
 let turnAbort=null;         // AbortController of the in-flight /turn/stream
 let playbackEpoch=0;        // bumped by stopPlayback(); stale chunks are dropped
 let hfDecim=null;           // stateful device-rate → 16 kHz decimator
+let micDevice="";           // preferred input deviceId ("" = system default)
 
 const COPY_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const CHECK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
@@ -1363,6 +1370,7 @@ async function start(){
   // hands-free: pull the effective VAD settings; auto-arm if enabled
   try{
     const s=await (await fetch("/settings")).json();
+    micDevice=s.mic_device||"";
     vadCfg={ vad_barge_in: s.vad_barge_in!==false,
              vad_threshold: parseFloat(s.vad_threshold)||0.5,
              vad_silence_ms: parseInt(s.vad_silence_ms)||500,
@@ -1385,6 +1393,10 @@ function end(){
   stopPlayback();
   releaseMic();
   if(ac) ac.close();
+  // the analyser belongs to the context we just closed — using it on the next
+  // call throws on every audio chunk (the "restarted call is frozen" bug)
+  try{ if(streamAnalyser) streamAnalyser.disconnect(); }catch(_){}
+  streamAnalyser=null; playAnalyser=null; nextStartTime=0; activeSources=[];
   clearInterval(timerInt);
   started=false; holding=false; busy=false;
   fetch("/end",{method:"POST"}).catch(()=>{});
@@ -1570,6 +1582,15 @@ async function loadSettings(){
   sel.value=s.tts_voice||"af_heart";
   $("#set_speed").value=s.tts_speed||1.0;
   $("#set_speedval").textContent=Number(s.tts_speed||1.0).toFixed(2).replace(/0$/,"")+"×";
+  // microphone picker (labels appear once mic permission has been granted)
+  try{
+    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==="audioinput" && d.deviceId && d.deviceId!=="default");
+    const md=$("#set_micdev");
+    md.innerHTML='<option value="">System default</option>'+
+      devs.map((d,i)=>`<option value="${d.deviceId}">${d.label||("Microphone "+(i+1))}</option>`).join("");
+    md.value=s.mic_device||"";
+    if(md.value!==(s.mic_device||"")) md.value="";   // saved device unplugged → default
+  }catch(_){}
   // cadence
   $("#set_chunking").value=s.tts_chunking||"hybrid";
   setSwitch($("#set_trim"), s.tts_trim!==false);
@@ -1659,6 +1680,7 @@ async function saveSettings(){
     llm_num_ctx:parseInt($("#set_numctx").value,10)||0,
     asr_model:asr?asr.model:undefined,
     asr_backend:asr?asr.backend:undefined,
+    mic_device:$("#set_micdev").value,
     vad_enabled:$("#set_vad_enabled").getAttribute("aria-checked")==="true",
     vad_barge_in:$("#set_vad_bargein").getAttribute("aria-checked")==="true",
     vad_threshold:parseFloat($("#set_vad_thresh").value),
@@ -1892,8 +1914,15 @@ async function loadFiles(){
 /* ---------- push to talk ---------- */
 // Open the mic (only while holding to talk). Returns false if permission denied.
 async function acquireMic(){
+  const base={echoCancellation:true,noiseSuppression:true,autoGainControl:true};
   try{
-    micStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    try{
+      micStream = await navigator.mediaDevices.getUserMedia({audio: micDevice ? {...base, deviceId:{exact:micDevice}} : base});
+    }catch(e){
+      if(!micDevice) throw e;
+      // the chosen device is gone (unplugged?) — fall back to system default
+      micStream = await navigator.mediaDevices.getUserMedia({audio: base});
+    }
   }catch(e){ alert("Microphone access is needed to talk. Please allow it in your browser."); return false; }
   micSource = ac.createMediaStreamSource(micStream);
   micAnalyser = ac.createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=.75;

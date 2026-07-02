@@ -79,6 +79,8 @@ DEFAULT_SETTINGS = {
     # Speech recognition (what turns your voice into text)
     "asr_model": vc.ASR_MODEL,           # HF model id
     "asr_backend": vc.ASR_BACKEND,       # 'mlx-audio' | 'parakeet-mlx'
+    # Microphone input device (browser deviceId; "" = system default)
+    "mic_device": "",
     # Hands-free (VAD): talk without holding; it detects speech start/stop
     "vad_enabled": False,                # hands-free mode armed on call start
     "vad_barge_in": True,                # speaking while it talks interrupts it
@@ -95,7 +97,7 @@ SETTINGS_FIELDS = (
     "tts_voice", "tts_speed",
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
-    "asr_model", "asr_backend",
+    "asr_model", "asr_backend", "mic_device",
     "vad_enabled", "vad_barge_in", "vad_threshold", "vad_silence_ms",
     "vad_prefix_ms", "vad_min_speech_ms", "debug_settings",
 )
@@ -794,24 +796,41 @@ def _start_session() -> None:
 
 
 def _finalize_session() -> None:
+    """End the current session: persist it immediately, then recap it in the
+    background. The recap is a full LLM call (seconds) — running it inline held
+    _lock, so ending a call and restarting froze the new call's first turns
+    behind the old call's recap."""
     global _session
     if _session and _session["turns"]:
         _session["ended_at"] = _session["ended_at"] or time.time()
-        # recap this conversation into Strata's episodic layer, so a later session
-        # can recall what it was about. One LLM call at end-of-conversation.
-        try:
-            recap = vc.summarize_session(_session["turns"], _llm_cfg())
-            if recap:
-                _session["summary"] = recap
-                vc.record_summary(_strata, recap, ts_ms=int(_session["ended_at"] * 1000))
-                print("[recap]", recap)
-        except Exception as e:
-            print("[recap] finalize failed:", e)
         sessions = _read_json(SESSIONS_FILE, [])
         sessions = [s for s in sessions if s["id"] != _session["id"]]
         sessions.append(_session)
         _write_json(SESSIONS_FILE, sessions)
+        snap = _session   # recap thread works from the snapshot
+        threading.Thread(target=_recap_session, args=(snap,),
+                         name="recap-finalize", daemon=True).start()
     _session = None
+
+
+def _recap_session(sess: dict) -> None:
+    """Background: recap one finished session into Strata's episodic layer.
+    Same discipline as _backfill_recaps — slow LLM call off-lock, brief writes
+    under _lock. If the process dies first, the startup backfill catches it."""
+    try:
+        recap = vc.summarize_session(sess["turns"], _llm_cfg())   # slow, off-lock
+        if not recap:
+            return
+        with _lock:
+            vc.record_summary(_strata, recap, ts_ms=int(sess["ended_at"] * 1000))
+            cur = _read_json(SESSIONS_FILE, [])
+            for c in cur:
+                if c.get("id") == sess["id"]:
+                    c["summary"] = recap
+            _write_json(SESSIONS_FILE, cur)
+        print("[recap]", recap)
+    except Exception as e:
+        print("[recap] finalize failed:", e)
 
 
 def _persist_session() -> None:
