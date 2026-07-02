@@ -26,9 +26,7 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
   session, memory, and timeline — switch freely.
 - **On-device speech.** Both ASR (Parakeet V3 TDT) and TTS (Kokoro) run through
   [`mlx-audio`](https://github.com/Blaizzy/mlx-audio) on Apple's MLX — one library,
-  one loader, and the foundation for future VAD/streaming. Fast and private.
-  (The original [`parakeet-mlx`](https://github.com/senstella/parakeet-mlx) loader
-  is still available via `VOICE_ASR_BACKEND=parakeet-mlx` for A/B comparison.)
+  one loader, and the engine behind the hands-free VAD. Fast and private.
 - **Real memory.** Backed by Strata Memory: durable facts, supersession (updating
   a fact keeps history), semantic recall, and canonical-first deletion (forgetting
   actually forgets). Conversations even carry over ("what were we just talking about?").
@@ -85,44 +83,71 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
   machine). The only network calls are to your chosen LLM (and the local embedder for
   recall).
 
-## Requirements
+## Install
 
-- macOS on Apple Silicon (M1–M4)
-- Python 3.12
-- [ffmpeg](https://ffmpeg.org) — `brew install ffmpeg`
-- An LLM backend — [Ollama](https://ollama.com) is easiest: `ollama pull qwen3.5:4b`
-- An embedding model for semantic recall: `ollama pull nomic-embed-text` (optional —
-  without it, memory falls back to injecting everything, which is fine at small scale)
-- The [`strata-memory`](https://github.com/StephenBiele/strata-memory) package (installed below)
-
-## Setup
+One command, on a Mac with Apple Silicon:
 
 ```sh
 git clone https://github.com/StephenBiele/Strata-Voice.git
 cd Strata-Voice
-python3.12 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+./install.sh
 ```
 
-`requirements.txt` pins `strata-memory` directly from its GitHub repo. To develop
-against a local checkout instead:
+The installer checks and installs the prerequisites (Python 3.12, ffmpeg, Ollama —
+via Homebrew), sets up the Python environment, and asks which tier you want:
 
-```sh
-.venv/bin/pip install -e ../strata-memory   # path to your strata-memory clone
-```
+| Tier | Downloads | Fits | Chat model | Memory model |
+| :--- | :--- | :--- | :--- | :--- |
+| **Lightweight** | ~7 GB | 16 GB Macs | `qwen3.5:9b` | same as chat |
+| **Recommended** | ~41 GB | 36 GB+ Macs | Qwen3.6-27B-MTP | `qwen3.6:latest` |
+
+Both tiers use Parakeet V3 (0.6B) for speech-to-text, Kokoro for the voice, and
+`nomic-embed-text` for semantic recall. Non-interactive installs:
+`./install.sh --light` or `./install.sh --recommended`. Re-running the installer
+is always safe — it never touches an existing profile or memories.
+
+> While the repos are private, installing requires GitHub access to
+> [`strata-memory`](https://github.com/StephenBiele/strata-memory) (pinned in
+> `requirements.txt`). Once they're public, the commands above just work.
 
 ## Run
 
 ```sh
-ollama serve            # if not already running
+./start.sh
+```
+
+That starts Ollama if needed, launches the server, and opens
+**http://localhost:8765** when it's ready. Click **Start conversation** (allow the
+microphone prompt), then **press and hold the orb — or the button — to talk**, or
+flip the waveform toggle for hands-free.
+
+First launch downloads the speech models from Hugging Face (~1 GB) unless the
+installer already prewarmed them.
+
+## Uninstall
+
+```sh
+./uninstall.sh
+```
+
+Prompts before each step — the Python environment, your data (`~/.vui` — asks
+twice), the Ollama models, and the cached speech models — then you delete the
+folder. Nothing is removed without a yes.
+
+<details>
+<summary><strong>Manual install</strong> (what the script does)</summary>
+
+```sh
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt   # strata-memory pins from GitHub
+ollama pull qwen3.6:latest && ollama pull nomic-embed-text
+ollama serve                                 # if not already running
 .venv/bin/python server.py
 ```
 
-Open **http://localhost:8765** and click **Start conversation** (the browser asks for
-microphone access here the first time — allow it), then **press and hold the orb — or the
-button — to talk**.
-
-On first run the speech models download from Hugging Face (~1 GB total) and cache.
+To develop against a local strata-memory checkout:
+`.venv/bin/pip install -e ../strata-memory`
+</details>
 
 ### CLI mode
 
@@ -141,8 +166,7 @@ Most things are set in the **Settings** page, but a few startup options are env 
 | `VOICE_PORT` | `8765` | web server port |
 | `VOICE_NAME` | `Sage` | initial assistant name (also editable in Settings) |
 | `VOICE_LLM_MODEL` | `qwen3.5:4b` | default Ollama model |
-| `VOICE_ASR_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | ASR model id (any mlx-audio STT model: `whisper`, `qwen3_asr`, `moonshine`, …) |
-| `VOICE_ASR_BACKEND` | `mlx-audio` | ASR loader: `mlx-audio` (unified stack) or `parakeet-mlx` (standalone, for A/B) |
+| `VOICE_ASR_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | ASR model id (any mlx-audio STT model — or pick in Settings) |
 | `VOICE_VAD_PORT` | `8766` | hands-free VAD channel (own port so speech detection keeps working mid-turn) |
 | `OLLAMA_URL` | `http://localhost:11434` | URL endpoint for local Ollama server |
 

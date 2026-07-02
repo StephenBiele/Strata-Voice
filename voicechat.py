@@ -1,8 +1,11 @@
-"""Quick, reliable push-to-talk voice assistant for Apple Silicon.
+"""Models + pipeline for the voice assistant, plus a minimal CLI mode.
 
-A deliberately simple alternative to the vui streaming pipeline: no VAD,
-no turn-endpointing guesswork, no WebRTC. You press Enter to talk, press
-Enter again to stop. That removes every source of the flakiness we hit.
+This module owns the shared pieces the web server (server.py) builds on:
+ASR/TTS loading, LLM calls (Ollama or any OpenAI-compatible API), prompt
+assembly, and the Strata Memory integration (facts, recaps, harvest,
+timeline). Run directly, it is a bare-bones terminal push-to-talk loop
+(press Enter to talk, Enter to stop) — the full experience (streaming,
+hands-free VAD, the call UI) lives in server.py.
 
 Pipeline:
     mic --> Parakeet V3 TDT (ASR) --> Ollama LLM --> Kokoro (TTS) --> speakers
@@ -37,11 +40,10 @@ import soundfile as sf
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 LLM_MODEL = os.environ.get("VOICE_LLM_MODEL", "qwen3.5:4b")
 ASR_MODEL = os.environ.get("VOICE_ASR_MODEL", "mlx-community/parakeet-tdt-0.6b-v3")
-# ASR backend. "mlx-audio" (default) loads the model through mlx-audio's STT
-# stack — same package as the Kokoro TTS, one dependency, and the foundation for
-# future VAD/streaming (mlx_audio.vad, realtime_vad). "parakeet-mlx" keeps
-# senstella's standalone loader, for A/B'ing latency/accuracy against the old path.
-ASR_BACKEND = os.environ.get("VOICE_ASR_BACKEND", "mlx-audio").strip().lower()
+# ASR loads through mlx-audio's STT stack — same package as the Kokoro TTS, one
+# dependency, and the foundation for VAD/streaming. (The parakeet-mlx A/B loader
+# was retired once mlx-audio proved at parity.)
+ASR_BACKEND = "mlx-audio"
 TTS_MODEL = os.environ.get("VOICE_TTS_MODEL", "prince-canuma/Kokoro-82M")
 TTS_VOICE = os.environ.get("VOICE_TTS_VOICE", "af_heart")
 DB_PATH = os.environ.get("VOICE_DB", str(Path.home() / ".vui" / "strata_memory.db"))
@@ -169,27 +171,21 @@ def patch_kokoro_tts() -> None:
 
 # ---- ASR ---------------------------------------------------------------------
 class _ASR:
-    """Uniform ASR wrapper so call sites use `asr.transcribe(path).text`
-    regardless of backend. mlx-audio's ParakeetTDT exposes `.generate()` (returns
-    an AlignedResult with `.text`); senstella's parakeet-mlx exposes `.transcribe()`
-    directly. Both load the same Parakeet-V3 model id by default."""
+    """Thin wrapper so call sites use `asr.transcribe(path).text` — mlx-audio's
+    STT models expose `.generate()` (returns an AlignedResult with `.text`)."""
 
     def __init__(self, backend: str, model):
         self.backend = backend
         self._model = model
 
     def transcribe(self, path):
-        if self.backend == "parakeet-mlx":
-            return self._model.transcribe(str(path))
         return self._model.generate(str(path))
 
 
 def load_asr(model: str = ASR_MODEL, backend: str = ASR_BACKEND) -> _ASR:
-    """Load the ASR model for the configured backend and return an `_ASR` wrapper.
-    Defaults to mlx-audio; set VOICE_ASR_BACKEND=parakeet-mlx for the old loader."""
-    if backend == "parakeet-mlx":
-        import parakeet_mlx
-        return _ASR("parakeet-mlx", parakeet_mlx.from_pretrained(model))
+    """Load an ASR model via mlx-audio's STT stack and return an `_ASR` wrapper.
+    `backend` is retained in the signature/settings for compatibility; only
+    "mlx-audio" ships."""
     from mlx_audio.stt.utils import load_model as _load_stt
     return _ASR("mlx-audio", _load_stt(model))
 

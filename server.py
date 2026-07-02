@@ -1,15 +1,17 @@
 """Web server for the voice assistant — a lightweight, reliable call UI.
 
-Serves a single-page front-end (index.html) and the turn endpoint plus a
-small API for past chats, memories, and reference documents. The browser
-captures mic audio while the user holds Space (push-to-talk), encodes a
-16 kHz WAV in-page, and POSTs it here. We run the same pipeline as the CLI
-— Parakeet (ASR) -> Ollama (LLM) -> Kokoro (TTS) — backed by Strata Memory,
-and return the spoken reply as a WAV the page plays back.
+Serves a single-page front-end (index.html), the streaming turn endpoints,
+and a small API for past chats, memories, and reference documents. The
+browser captures mic audio (hold the orb to talk, or hands-free via the
+Silero VAD channel on :VAD_PORT), encodes a 16 kHz WAV in-page, and POSTs
+it to /turn/stream. Pipeline: Parakeet (ASR) -> LLM (Ollama or any
+OpenAI-compatible API) -> Kokoro (TTS), backed by Strata Memory; the reply
+streams back as NDJSON with per-sentence audio chunks.
 
-No streaming / WebRTC / VAD: turns are explicit, which is what makes it
-feel instant and never mis-fire. Single-threaded on purpose — MLX's Metal
-GPU stream lives in the thread that loaded the models (this one).
+The main server is single-threaded on purpose — MLX's Metal GPU stream
+lives in the thread that loaded the models (this one). Anything slow and
+non-conversational (memory writes, recaps, fact harvest, VAD) runs on
+background threads or the separate VAD port so it never blocks a turn.
 
 Run:  python server.py     then open http://localhost:8765
 """
@@ -78,7 +80,7 @@ DEFAULT_SETTINGS = {
     "llm_num_ctx": 0,                    # context window, Ollama only (0 = model default)
     # Speech recognition (what turns your voice into text)
     "asr_model": vc.ASR_MODEL,           # HF model id
-    "asr_backend": vc.ASR_BACKEND,       # 'mlx-audio' | 'parakeet-mlx'
+    "asr_backend": vc.ASR_BACKEND,       # loader id (only 'mlx-audio' ships)
     # Microphone input device (browser deviceId; "" = system default)
     "mic_device": "",
     # Ollama model for background memory work ("" = same as chat model).
@@ -116,9 +118,6 @@ ASR_MODELS = [
     {"id": "parakeet", "model": "mlx-community/parakeet-tdt-0.6b-v3", "backend": "mlx-audio",
      "label": "Parakeet — Balanced (recommended) — 0.6B",
      "blurb": "Fast + accurate for everyday English. Low memory."},
-    {"id": "parakeet-classic", "model": "mlx-community/parakeet-tdt-0.6b-v3", "backend": "parakeet-mlx",
-     "label": "Parakeet — Classic — 0.6B",
-     "blurb": "Same model, alternative loader. Very fast."},
     {"id": "whisper-turbo", "model": "openai/whisper-large-v3-turbo", "backend": "mlx-audio",
      "label": "Whisper Turbo — ~0.8B",
      "blurb": "Strong on accents & other languages. Good accuracy."},
@@ -307,7 +306,10 @@ def _load_models() -> None:
     # Honor the saved speech-recognition choice; fall back to the default if that
     # model can't load, so a bad saved pick never blocks startup.
     s = _settings()
-    want = (s.get("asr_model") or vc.ASR_MODEL, s.get("asr_backend") or vc.ASR_BACKEND)
+    backend = s.get("asr_backend") or vc.ASR_BACKEND
+    if backend == "parakeet-mlx":     # retired A/B loader — old settings coerce cleanly
+        backend = "mlx-audio"
+    want = (s.get("asr_model") or vc.ASR_MODEL, backend)
     try:
         _asr = vc.load_asr(model=want[0], backend=want[1]); _asr_key = want
     except Exception as e:
@@ -747,20 +749,6 @@ def _synth_reply(text: str, *, chunking: str | None = None, trim: bool | None = 
     return np.concatenate(out)
 
 
-def _synth(text: str, voice: str | None = None, speed: float | None = None) -> np.ndarray:
-    """Back-compat wrapper: full synthesis under the current cadence settings."""
-    return _synth_reply(text, voice=voice, speed=speed)
-
-
-def _tts_wav_b64(text: str) -> str:
-    audio = _synth(text)
-    if audio.size == 0:
-        return ""
-    buf = io.BytesIO()
-    sf.write(buf, audio, vc.TTS_SR, format="WAV", subtype="PCM_16")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
 def _audio_b64(audio: np.ndarray) -> str:
     buf = io.BytesIO()
     sf.write(buf, audio, vc.TTS_SR, format="WAV", subtype="PCM_16")
@@ -940,55 +928,6 @@ def _persist_session() -> None:
 
 
 # ---- turn --------------------------------------------------------------------
-def _handle_turn(wav_bytes: bytes) -> dict:
-    with _lock:
-        tmp = HERE / ".turn_in.wav"
-        tmp.write_bytes(wav_bytes)
-        text = _asr.transcribe(str(tmp)).text.strip()
-        if not text:
-            return {"ok": True, "empty": True}
-
-        if _session is None:
-            _start_session()
-
-        _history.append({"role": "user", "content": text})
-        event_id = vc.record_event(_strata, text)     # episodic spine (L0 event)
-        captured = vc.capture_memory(_strata, text, event_id)   # forgets only, immediate
-        if captured:
-            print("[memory]", captured)
-        _mem_jobs.put((text, event_id, _mem_llm_cfg(), vc.remember_candidate(text),
-                       _recent_context()))
-        mem = vc.list_memories(_strata)
-        mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
-        recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
-        s = _settings()
-        reply_raw = vc.llm_reply(
-            _history, mem_text,
-            documents=_doc_context(), profile=_profile_context(),
-            persona=s["persona"], cfg=_llm_cfg(), recent=recent,
-            forgotten=_forgotten,
-        )
-        reply = vc.apply_directives(_strata, reply_raw, mem, forgotten=_forgotten)
-        _history.append({"role": "assistant", "content": reply})
-
-        # transcript
-        _session["turns"].append({"role": "user", "content": text, "t": time.time()})
-        _session["turns"].append({"role": "assistant", "content": reply, "t": time.time()})
-        if not _session["title"]:
-            _session["title"] = text[:60]
-        _persist_session()
-
-        audio_b64 = _tts_wav_b64(reply) if reply else ""
-        memories = [m["text"] for m in vc.list_memories(_strata)]
-        return {
-            "ok": True,
-            "transcript": text,
-            "reply": reply,
-            "audio": audio_b64,
-            "memories": memories,
-        }
-
-
 def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = False):
     """Shared turn core for both voice and text. Runs the full memory + LLM +
     events + session pipeline and yields NDJSON-ready dicts:
@@ -1376,14 +1315,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, "reply": reply[:80]})
             except Exception as e:
                 return self._json(200, {"ok": False, "error": str(e)})
-        if u.path == "/turn":
-            try:
-                result = _handle_turn(self._body())
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                return self._json(200, {"ok": False, "error": str(e)})
-            return self._json(200, result)
         if u.path == "/turn/stream":
             wav = self._body()
             private = parse_qs(u.query).get("private", ["0"])[0] in ("1", "true")
