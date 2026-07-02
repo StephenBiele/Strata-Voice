@@ -498,6 +498,7 @@
   .row .grow{ flex:1; min-width:0; }
   .row .title{ font-weight:600; color:var(--ink); margin-bottom:.15rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row.memitem .title{ white-space:normal; font-weight:500; }
+  .memdate{ font-size:.72rem; color:var(--ink-faint); margin-top:.2rem; letter-spacing:.02em; }
   .row .sub{ font-size:.82rem; color:var(--ink-faint); }
   .row .x{
     appearance:none; border:none; background:transparent; cursor:pointer; color:var(--ink-faint); flex:none;
@@ -1154,6 +1155,7 @@
         <div class="toolbar">
           <button class="toolbtn" id="auditBtn">⚖ Find contradictions</button>
           <button class="toolbtn" id="evalBtn">✓ Run recall test</button>
+          <button class="toolbtn" id="polishBtn" title="Rewrite awkward memories, drop junk — the same smoothing new memories get">✨ Smooth memories</button>
         </div>
         <div id="memTools" class="toolresult" hidden></div>
         <div id="memoriesBody"></div>
@@ -1915,6 +1917,16 @@ async function loadTimeline(){
   body.appendChild(tl);
 }
 
+function memWhen(t){
+  if(!t) return "";
+  const d=new Date(t), now=new Date();
+  const days=Math.floor((now-d)/86400000);
+  if(d.toDateString()===now.toDateString()) return "added today";
+  if(days<1) return "added yesterday";
+  if(days<7) return "added "+d.toLocaleDateString(undefined,{weekday:"long"});
+  return "added "+d.toLocaleDateString(undefined,{month:"short",day:"numeric"})+
+         (d.getFullYear()!==now.getFullYear()?" "+d.getFullYear():"");
+}
 async function loadMemories(){
   const body=document.getElementById("memoriesBody");
   body.innerHTML=skeleton(4);
@@ -1923,8 +1935,9 @@ async function loadMemories(){
   body.innerHTML="";
   list.forEach(m=>{
     const row=document.createElement("div"); row.className="row memitem";
-    row.innerHTML='<div class="grow"><div class="title"></div></div><button class="x" title="Forget this memory" aria-label="Forget this memory">✕</button>';
+    row.innerHTML='<div class="grow"><div class="title"></div><div class="memdate"></div></div><button class="x" title="Forget this memory" aria-label="Forget this memory">✕</button>';
     row.querySelector(".title").textContent=m.text;
+    row.querySelector(".memdate").textContent=memWhen(m.t);
     row.querySelector(".x").addEventListener("click",(e)=>{
       confirmThenDelete(e.currentTarget, async()=>{
         await fetch("/memory/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:m.id})});
@@ -2491,6 +2504,25 @@ auditBtn.addEventListener("click", async()=>{
   auditBtn.disabled=false; auditBtn.textContent="⚖ Find contradictions";
   if(!r.ok){ memTools.innerHTML=`<div class="muted">Couldn’t run the check${r.error?": "+esc(r.error):""}.</div>`; return; }
   renderAudit(r.issues||[]);
+});
+// one-shot smoothing pass over the whole store — same treatment new memories get
+const polishBtn=$("#polishBtn");
+polishBtn.addEventListener("click", async()=>{
+  polishBtn.disabled=true; polishBtn.textContent="Smoothing…";
+  memTools.hidden=false; memTools.innerHTML='<div class="muted">Reviewing every memory — rewriting garble, dropping junk…</div>';
+  let r={}; try{ r=await (await fetch("/memory/polish",{method:"POST"})).json(); }catch(_){}
+  polishBtn.disabled=false; polishBtn.textContent="✨ Smooth memories";
+  if(!r.ok){ memTools.innerHTML='<div class="muted">Couldn’t run the smoothing pass.</div>'; return; }
+  let html=`<div class="rhead">Memory smoothing <span class="muted">${r.rewrote} rewritten · ${r.removed} removed · ${r.kept} kept</span></div>`;
+  (r.changes||[]).forEach(ch=>{
+    if(ch.action==="rewrite")
+      html+=`<div class="issue"><div class="drop">${esc(ch.old)}</div><div class="keep">→ ${esc(ch.text)}</div></div>`;
+    else
+      html+=`<div class="issue"><div class="drop">Removed: ${esc(ch.old)}</div></div>`;
+  });
+  if(!(r.changes||[]).length) html+='<div class="muted">Everything was already clean.</div>';
+  memTools.innerHTML=html;
+  loadMemories();
 });
 function renderAudit(issues){
   if(!issues.length){ memTools.innerHTML=`<div class="rhead">Memory hygiene${infoIcon(AUDIT_TIP)}</div><div class="muted">Nothing to clean up — no contradictions, redundancy, duplicates, or junk found.</div>`; return; }

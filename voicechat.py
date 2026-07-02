@@ -442,7 +442,7 @@ def list_memories(strata) -> list[dict]:
     recs = strata.engine.store.query(record_type=RecordType.FACT, exclude_tombstoned=True)
     active = [r for r in recs if r.status in (Status.ACTIVE, Status.REINFORCED)]
     active.sort(key=lambda r: r.created_at)
-    return [{"id": r.id, "text": r.content} for r in active]
+    return [{"id": r.id, "text": r.content, "t": r.created_at} for r in active]
 
 
 # ---- semantic recall (Strata vector layer) -----------------------------------
@@ -622,6 +622,10 @@ The message is a voice transcript and may contain mis-transcriptions, filler, an
 garbled wording into a fact. Write each fact cleanly in your own words; if a passage is too garbled to \
 be sure what was meant, skip it rather than guess.
 Copy anchor details — names, dates, days of the week, times, numbers, places, and titles — EXACTLY as the user said them; paraphrase only the wording around them, never the anchors.
+Facts are read aloud by a voice, so spell everything out ("Arvada, Colorado" — never "Arvada, Co.").
+Never begin a fact with "The user" — start with the verb or noun ("Has a dog named Molly", "Getting into bouldering").
+A one-time outing or errand ("went to the park", "was at Cherry Creek today") is NOT durable — keep an activity \
+only when it shows an ongoing interest or habit ("Getting into bouldering").
 Return ONLY a JSON array of short factual strings written in the third person, e.g.
 ["Has a dog named Rex", "Works as a nurse", "Has a job interview on Tuesday", "Allergic to shellfish"].
 Include stable things: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, health, upcoming commitments (interviews, appointments), and notable life facts.
@@ -701,6 +705,10 @@ building internal tools").
 The transcript is from speech recognition and may contain mis-transcriptions and clipped sentence \
 starts — never copy garbled wording; write each fact cleanly, and skip what you can't confidently parse.
 Copy anchor details — names, dates, days of the week, times, numbers, places, and titles — EXACTLY as the user said them; paraphrase only the wording around them, never the anchors.
+Facts are read aloud by a voice, so spell everything out ("Arvada, Colorado" — never "Arvada, Co.").
+Never begin a fact with "The user" — start with the verb or noun ("Has a dog named Molly", "Getting into bouldering").
+A one-time outing or errand ("went to the park", "was at Cherry Creek today") is NOT durable — keep an activity \
+only when it shows an ongoing interest or habit ("Getting into bouldering").
 Return ONLY a JSON array of short factual strings in the third person.
 Include: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, \
 upcoming commitments (interviews, appointments, deadlines), notable experience and accomplishments.
@@ -742,6 +750,74 @@ def harvest_session_facts(turns: list[dict], existing: list[str],
     except Exception:
         return []
     return [_clean(x) for x in arr if isinstance(x, str) and len(_clean(x)) > 2][:8]
+
+
+_STORE_POLISH_PROMPT = """You are cleaning up a voice assistant's long-term memory store. Below are the \
+stored memories, numbered. Some were written by older, sloppier versions of the system.
+For each memory decide ONE of:
+- keep     — already a clean, durable, third-person fact. Most memories should be kept.
+- rewrite  — the fact is real but badly written: verbatim transcription garble, filler words, \
+starts with "The user", contains abbreviations that sound wrong when read aloud \
+("Arvada, Co." -> "Arvada, Colorado"), or is a fragment. Rewrite as ONE clean third-person fact. \
+Keep every anchor detail (names, dates, times, numbers, places) exactly. The rewritten text must \
+NEVER begin with "The user" — start with the verb or noun ("Explained…", "Has a…", "Lives in…").
+- delete   — not a durable fact at all: a question ("How to remove memories"), a test command \
+("This: my favorite planet is..."), a one-time outing with no lasting significance \
+("Went to the park today"), or an exact duplicate of another memory (delete the worse-written one).
+Durable interests survive: "Getting into bouldering" is a keep even though a single park visit is not.
+
+Return ONLY a JSON array of changes — memories to keep are simply omitted:
+[{{"n": 3, "action": "rewrite", "text": "..."}}, {{"n": 7, "action": "delete"}}]
+If everything is already clean, return [].
+
+Memories:
+{numbered}
+
+JSON array:"""
+
+
+def polish_memory_store(memories: list[dict], cfg: dict | None = None) -> list[dict]:
+    """One-shot smoothing pass over the whole memory store (the Memories page
+    button). Returns a list of {"id", "action": "rewrite"|"delete", "text"?} —
+    the caller applies them. The LLM sees positional numbers, never raw 64-bit
+    ids (models mangle long ids)."""
+    if not memories:
+        return []
+    numbered = "\n".join(f"{i+1}. {m['text']}" for i, m in enumerate(memories))
+    try:
+        raw = llm_complete([{"role": "user",
+                             "content": _STORE_POLISH_PROMPT.format(numbered=numbered)}],
+                           _mem_cfg(cfg))
+    except Exception as e:
+        print(f"[memory] store polish failed: {e}")
+        return []
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except Exception:
+        return []
+    out = []
+    for ch in arr:
+        if not isinstance(ch, dict):
+            continue
+        try:
+            idx = int(ch.get("n", 0)) - 1
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= idx < len(memories)):
+            continue
+        action = ch.get("action")
+        if action == "delete":
+            out.append({"id": memories[idx]["id"], "action": "delete",
+                        "old": memories[idx]["text"]})
+        elif action == "rewrite":
+            text = _clean(ch.get("text") or "")
+            if len(text) > 2 and text != memories[idx]["text"]:
+                out.append({"id": memories[idx]["id"], "action": "rewrite",
+                            "text": text, "old": memories[idx]["text"]})
+    return out
 
 
 # ---- events & timeline (episodic spine) --------------------------------------

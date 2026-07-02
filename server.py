@@ -1200,8 +1200,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/memories":
             with _lock:
                 mem = vc.list_memories(_strata)
+            mem.sort(key=lambda m: m.get("t") or 0, reverse=True)   # newest first
             # ids are 64-bit ints; stringify so JS doesn't round them past 2^53.
-            mem = [{"id": str(m["id"]), "text": m["text"]} for m in mem]
+            mem = [{"id": str(m["id"]), "text": m["text"], "t": m.get("t")} for m in mem]
             return self._json(200, {"memories": mem})
         if u.path == "/timeline":
             with _lock:
@@ -1379,6 +1380,32 @@ class Handler(BaseHTTPRequestHandler):
             docs = [d for d in _read_json(DOCS_FILE, []) if d["id"] != did]
             _write_json(DOCS_FILE, docs)
             return self._json(200, {"ok": True})
+        if u.path == "/memory/polish":
+            # one-shot smoothing pass over the whole store (Memories page button):
+            # LLM proposes keep/rewrite/delete off-lock; brief writes under _lock
+            with _lock:
+                mems = vc.list_memories(_strata)
+            changes = vc.polish_memory_store(mems, _mem_llm_cfg())   # slow LLM, off-lock
+            rewrote = removed = 0
+            detail = []
+            with _lock:
+                for ch in changes:
+                    try:
+                        if ch["action"] == "delete":
+                            _strata.delete_memory(int(ch["id"]), mode="hard")
+                            removed += 1
+                            detail.append({"action": "delete", "old": ch["old"]})
+                        elif ch["action"] == "rewrite":
+                            _strata.supersede_memory(int(ch["id"]), ch["text"])
+                            rewrote += 1
+                            detail.append({"action": "rewrite", "old": ch["old"],
+                                           "text": ch["text"]})
+                    except Exception as e:
+                        print(f"[memory] polish apply failed on {ch.get('id')}: {e}")
+            print(f"[memory] store polish: {rewrote} rewritten, {removed} removed")
+            return self._json(200, {"ok": True, "rewrote": rewrote,
+                                    "removed": removed, "kept": len(mems) - rewrote - removed,
+                                    "changes": detail})
         if u.path == "/memory/delete":
             body = json.loads(self._body() or b"{}")
             mid = body.get("id")
