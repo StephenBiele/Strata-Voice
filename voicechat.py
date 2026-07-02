@@ -78,6 +78,9 @@ AFTER your spoken reply (the user never hears these; they are stripped):
 family, pets, preferences, allergies), append:  [MEM_ADD] <short fact>
 - If that fact updates an existing memory, instead append:  [MEM_ADD] <new fact>
 - If the user asks you to forget something, append:  [MEM_DEL] <keywords>
+Write memories the way a person remembers: the GIST, in clean third person \
+("Has a job interview on Tuesday") — never the user's verbatim wording, filler \
+words, or transcription noise. One complete thought per fact.
 Only emit a directive for genuinely durable facts or explicit forget requests. \
 Never emit one for small talk, questions, or transient events."""
 
