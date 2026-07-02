@@ -512,95 +512,95 @@ def select_memories(strata, query: str, *, semantic: bool = True,
     return recall_memories(strata, query)
 
 
-# ---- deterministic memory capture (no LLM) -----------------------------------
-# Rule-based extraction from the user's own words. Runs every turn regardless of
-# what the model does, so memory no longer depends on the LLM emitting directives.
+# ---- memory capture ------------------------------------------------------------
+# Forgetting stays deterministic and immediate — deletion must be reliable.
+# WRITING memories is never verbatim anymore: an explicit "remember …" becomes a
+# candidate that the smoothing layer (polish_fact, background) judges and rewrites
+# into a clean third-person fact; everything implicit is left to extract_facts_llm.
+# The old regex writers (likes/lives/pets…) stored raw voice-transcript spans,
+# which produced garbled memories ("Likes presented in that video enter that…")
+# and captured questions as facts ("do you remember how to X" -> "How to X").
 def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip(" .,!?;:'\"").strip()
 
 
 def capture_memory(strata, user_text: str, event_id: int | None = None) -> list[str]:
-    """Extract durable facts / forget-requests from a user utterance and apply
-    them to Strata directly. Returns a list of change descriptions for logging.
-
-    If ``event_id`` is given, each newly added fact is linked to that source
-    event (so the timeline knows when/where the fact was learned)."""
+    """Apply explicit forget-requests from a user utterance immediately.
+    Returns a list of change descriptions for logging. (Fact WRITES happen in
+    the background smoothing layer — see remember_candidate / polish_fact.)"""
     text = (user_text or "").strip()
     if not text:
         return []
-    memories = list_memories(strata)
-    changes: list[str] = []
-
-    def add(fact: str) -> None:
-        fact = _clean(fact)
-        if len(fact) < 2:
-            return
-        fact = fact[0].upper() + fact[1:]
-        before = {m["text"] for m in memories}
-        rid = _add_or_supersede(strata, fact, memories)
-        memories.append({"id": rid or -1, "text": fact})   # keep snapshot fresh for dedup
-        if rid and event_id:
-            _link_source(strata, rid, event_id)
-        if fact not in before:
-            changes.append(f"+ {fact}")
-
-    # 1) Explicit forget — takes the whole turn.
+    # "do you remember …" is a recall question, not a forget/remember command
     m = re.search(r"\b(?:forget|delete)\b(?:\s+(?:about|the\s+memory\s+about|that|my))?\s+(.+)", text, re.I)
     if m:
         kw = _clean(m.group(1))
         if kw:
-            _forget(strata, kw, memories)
+            _forget(strata, kw, list_memories(strata))
             return [f"- forget: {kw}"]
+    return []
 
-    # 2) Explicit remember — store the clause verbatim.
+
+def remember_candidate(user_text: str) -> str | None:
+    """Detect an explicit 'remember that …' command and return the clause to be
+    polished + stored by the background worker. Returns None for recall
+    questions ('do you remember …?') and normal speech."""
+    text = (user_text or "").strip()
+    if not text:
+        return None
+    # questions about memory are recall, not storage commands
+    if re.search(r"\b(?:do|did|can|could|will|would)\s+you\s+remember\b", text, re.I):
+        return None
     m = re.search(r"\b(?:remember|make a note|note that|keep in mind|don'?t forget)\b(?:\s+that)?\s+(.+)", text, re.I)
-    if m:
-        add(m.group(1))
-        return changes
+    if not m:
+        return None
+    clause = _clean(m.group(1))
+    return clause if len(clause) >= 2 else None
 
-    # 3) Occupation — preserve the preposition so it reads naturally.
-    m = re.search(r"\bi work (as|at|in)\s+([^.!?]+)", text, re.I)
-    if m:
-        add(f"Works {m.group(1).lower()} {_clean(m.group(2))}")
-    m = re.search(r"\bmy job is\s+([^.!?]+)", text, re.I)
-    if m:
-        add(f"Job: {_clean(m.group(1))}")
 
-    # 4) Other high-confidence durable patterns (each independent).
-    #    Location/allergy allow commas (e.g. "Austin, Texas"); preferences stop
-    #    at a comma to avoid swallowing a following clause.
-    pats = [
-        (r"\b(?:my name is|i am called|i'?m called|you can call me|call me)\s+([A-Za-z][A-Za-z'’\-]+(?:\s+[A-Za-z][A-Za-z'’\-]+)?)", "Name is {}"),
-        (r"\b(?:i live in|i'?m from|i am from|i'?m based in|i am based in|i'?m located in)\s+([^.!?]+?)(?:\s+and\b|[.!?]|$)", "Lives in {}"),
-        (r"\b(?:i'?m allergic to|i am allergic to|allergic to)\s+([^.!?]+?)(?:\s+and\b|[.!?]|$)", "Allergic to {}"),
-        (r"\bi (?:really )?like\s+([^.,!?]+)", "Likes {}"),
-        (r"\bi (?:really )?love\s+([^.,!?]+)", "Loves {}"),
-        (r"\bi (?:really )?enjoy\s+([^.,!?]+)", "Enjoys {}"),
-        (r"\bi (?:really )?prefer\s+([^.,!?]+)", "Prefers {}"),
-        (r"\bi (?:really )?(?:hate|dislike|don'?t like)\s+([^.,!?]+)", "Dislikes {}"),
-    ]
-    for pat, tmpl in pats:
-        m = re.search(pat, text, re.I)
-        if m:
-            add(tmpl.format(_clean(m.group(1))))
+_POLISH_PROMPT = """The user explicitly asked their assistant to remember something. The request below \
+comes from a voice transcript and may contain mis-transcriptions or filler words.
+Rewrite it as ONE short, clean memory in the third person (e.g. "Has a job interview on Tuesday", \
+"Prefers replies to be brief"). Fix obvious transcription garble; keep every real detail; add nothing.
+If it is actually a question or a request to recall/delete (not something to store), reply with exactly SKIP.
+Reply with ONLY the memory text (or SKIP) — no quotes, no explanation.
 
-    # 4) Pets / family — only for a known set of nouns to avoid false positives.
-    m = re.search(r"\bi have (?:a |an )?(dog|cat|son|daughter|wife|husband|partner|"
-                  r"brother|sister|kid|child|baby|pet)\b(?:\s+(?:named|called)\s+([A-Za-z]+))?",
-                  text, re.I)
-    if m:
-        noun, name = m.group(1), m.group(2)
-        add(f"Has a {noun}" + (f" named {name}" if name else ""))
+Request: "{text}" """
 
-    return changes
+
+def polish_fact(candidate: str, cfg: dict | None = None) -> str | None:
+    """Smoothing layer for explicit remember-commands: judge + rewrite into a
+    clean third-person fact. Falls back to the cleaned verbatim clause if the
+    LLM is unreachable (an explicit command must never be silently dropped);
+    returns None when the model says it isn't a storable fact."""
+    candidate = _clean(candidate or "")
+    if not candidate:
+        return None
+    fallback = candidate[0].upper() + candidate[1:]
+    try:
+        reply = llm_complete([{"role": "user", "content": _POLISH_PROMPT.format(text=candidate)}], cfg)
+        reply = _THINK_TAG.sub("", reply).strip().strip('"').strip()
+    except Exception as e:
+        print(f"[memory] polish failed ({e}); storing verbatim")
+        return fallback
+    if not reply:
+        return fallback
+    if reply.upper().startswith("SKIP"):
+        return None
+    # guard against a chatty model: a memory is one short line
+    line = reply.splitlines()[0].strip()
+    return line if 2 <= len(line) <= 200 else fallback
 
 
 # ---- LLM extraction pass (covers natural speech the patterns miss) -----------
 _EXTRACT_PROMPT = """You pull durable facts about the user out of their latest message, for long-term memory.
+The message is a voice transcript and may contain mis-transcriptions, filler, and run-ons — NEVER copy \
+garbled wording into a fact. Write each fact cleanly in your own words; if a passage is too garbled to \
+be sure what was meant, skip it rather than guess.
 Return ONLY a JSON array of short factual strings written in the third person, e.g.
-["Has a dog named Rex", "Works as a nurse", "Restoring a vintage motorcycle", "Allergic to shellfish"].
-Include stable things: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, health, and notable life facts.
-Exclude: questions, comments about the assistant, fleeting events with no lasting significance, pure small talk, and anything already in existing memory.
+["Has a dog named Rex", "Works as a nurse", "Has a job interview on Tuesday", "Allergic to shellfish"].
+Include stable things: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, health, upcoming commitments (interviews, appointments), and notable life facts.
+Exclude: questions (including questions about the assistant or its memory), comments about the assistant, fleeting events with no lasting significance, pure small talk, and anything already in existing memory.
 If nothing durable is stated, return [].
 
 Existing memory (do not duplicate):

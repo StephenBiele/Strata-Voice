@@ -389,25 +389,26 @@ def _backfill_recaps() -> None:
 
 
 def _memory_worker() -> None:
-    """Background fact-extraction worker. The 'what should I remember?' LLM pass
-    used to run inline at the tail of every turn while the turn still held _lock —
-    so your *next* question waited on the *previous* turn's bookkeeping. The turn
-    now enqueues (text, event_id, cfg) and returns immediately; this thread does
-    the multi-second LLM call off the critical path.
+    """Background memory-writing worker — ALL fact writes flow through here so
+    nothing is ever stored verbatim from a voice transcript. Per job:
+    (1) an explicit "remember …" candidate is polished (judged + rewritten into
+    a clean third-person fact) and stored, and (2) the extraction pass distills
+    any other durable facts from the turn. Both are multi-second LLM calls, so
+    they run here instead of inline (inline they held _lock past the end of the
+    turn, stalling the user's next question).
 
     Pattern mirrors _backfill_recaps: own Strata connection (DB is WAL, so a second
-    connection is safe), the slow LLM call runs off-lock, and only the brief
+    connection is safe), the slow LLM calls run off-lock, and only the brief
     canonical write is taken under _lock (so the two connections never collide on
     SQLite). New facts land in the canonical store and are visible to the main
     connection's next read, so dump-all recall sees them right away; only large-
-    store *vector* recall of a just-extracted fact may lag until the next index
-    warm — a rare edge, and deterministic capture already handled obvious facts."""
+    store *vector* recall of a just-written fact may lag until the next index warm."""
     try:
         from strata.gateway.api import Strata
         st = Strata.open(db_path=vc.DB_PATH, embedder=vc.make_embedder())
     except Exception as e:
-        print(f"[memory] extraction worker disabled ({e}); "
-              "facts are still captured deterministically inline")
+        print(f"[memory] memory worker disabled ({e}); "
+              "new facts won't be saved this session (forgets still work)")
         st = None
     while True:
         job = _mem_jobs.get()
@@ -416,7 +417,17 @@ def _memory_worker() -> None:
                 return
             if st is None:
                 continue
-            text, event_id, cfg = job
+            text, event_id, cfg, candidate = job
+            # explicit "remember …" first: the smoothing layer judges + rewrites
+            # it (or falls back to verbatim if the LLM is unreachable) so an
+            # explicit command is never lost and never stored as garble.
+            if candidate:
+                polished = vc.polish_fact(candidate, cfg)          # slow LLM, off-lock
+                if polished:
+                    with _lock:
+                        added = vc.add_facts(st, [polished], event_id)
+                    if added:
+                        print("[memory] remembered:", added)
             existing = [m["text"] for m in vc.list_memories(st)]   # read, off-lock
             new_facts = vc.extract_facts_llm(text, existing, cfg)  # slow LLM, off-lock
             if new_facts:
@@ -856,9 +867,10 @@ def _handle_turn(wav_bytes: bytes) -> dict:
 
         _history.append({"role": "user", "content": text})
         event_id = vc.record_event(_strata, text)     # episodic spine (L0 event)
-        captured = vc.capture_memory(_strata, text, event_id)   # deterministic, no LLM
+        captured = vc.capture_memory(_strata, text, event_id)   # forgets only, immediate
         if captured:
             print("[memory]", captured)
+        _mem_jobs.put((text, event_id, _llm_cfg(), vc.remember_candidate(text)))
         mem = vc.list_memories(_strata)
         mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
         recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
@@ -904,7 +916,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     _history.append({"role": "user", "content": text})   # ephemeral; not persisted
     event_id = None if private else vc.record_event(_strata, text)   # episodic spine (L0 event)
     if not private:
-        captured = vc.capture_memory(_strata, text, event_id)   # deterministic, no LLM
+        captured = vc.capture_memory(_strata, text, event_id)   # forgets only, immediate
         if captured:
             print("[memory]", captured)
 
@@ -1003,11 +1015,11 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         if not _session["title"]:
             _session["title"] = text[:60]
         _persist_session()
-        # LLM extraction pass — captures durable facts from natural speech that the
-        # deterministic patterns miss. Handed to the background memory worker rather
-        # than run here: it's a full (multi-second) LLM call, and running it inline
-        # held _lock past the end of the turn, stalling the user's next question.
-        _mem_jobs.put((text, event_id, _llm_cfg()))
+        # Memory writes go through the background smoothing layer: an explicit
+        # "remember …" clause is polished (judged + rewritten) before storage,
+        # and the LLM extraction pass distills everything else. Nothing is
+        # stored verbatim, and none of it delays the next turn.
+        _mem_jobs.put((text, event_id, _llm_cfg(), vc.remember_candidate(text)))
 
     memories = [m["text"] for m in vc.list_memories(_strata)]
     yield {"type": "done", "reply": reply, "memories": memories,
