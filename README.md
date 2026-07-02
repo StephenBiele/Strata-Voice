@@ -154,6 +154,14 @@ parses and writes to Strata (using supersession when it updates an existing fact
 "Forget …" appends `[MEM_DEL]`, which performs a canonical-first hard delete
 (tombstone) in Strata. The directives are stripped before anything is spoken.
 
+**Nothing is stored verbatim.** Voice transcripts are messy, so all memory writes go
+through a smoothing layer: an explicit "remember…" is judged and rewritten into one
+clean third-person fact, a background extraction pass (with recent turns as context)
+distills implicit facts, and when a conversation ends a **whole-transcript harvest**
+assembles facts that were scattered across turns ("I have an interview" … "it's next
+Tuesday" … "for a builder role" → one complete memory). Deleting stays instant and
+rule-based, and anything you forget mid-call won't be brought up again.
+
 **Conversations carry over.** When a conversation ends it's recapped into Strata's
 episodic layer. On a later turn, a retrieval layer embeds what you just said and — only
 when it's relevant (asking to recall, "continue where we left off", or referring back to a

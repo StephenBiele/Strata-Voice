@@ -845,7 +845,7 @@
         </div>
         <div class="vadrow">
           <label>Lead-in padding · <span id="dbg_prefixval">300 ms</span></label>
-          <input type="range" id="dbg_prefix" class="slider" min="0" max="800" step="50" value="300">
+          <input type="range" id="dbg_prefix" class="slider" min="0" max="800" step="50" value="500">
         </div>
         <div class="vadrow">
           <label>Minimum speech length · <span id="dbg_minspeechval">250 ms</span></label>
@@ -1066,8 +1066,8 @@
         <div class="hint">How long a silence ends your turn. Shorter feels snappier; longer lets you think mid-sentence.</div>
       </div>
       <div class="field">
-        <label>Lead-in padding · <span class="speedval" id="set_vad_prefixval">300 ms</span></label>
-        <input type="range" id="set_vad_prefix" class="slider" min="0" max="800" step="50" value="300">
+        <label>Lead-in padding · <span class="speedval" id="set_vad_prefixval">500 ms</span></label>
+        <input type="range" id="set_vad_prefix" class="slider" min="0" max="800" step="50" value="500">
         <div class="hint">Audio kept from just before you started talking, so first words aren't clipped.</div>
       </div>
       <div class="field">
@@ -1203,7 +1203,7 @@ let drawerPending=null, lastUserText="";
 let handsFree=false;        // armed: mic stays open, speech start/stop auto-detected
 let vadBase="";             // http://host:vad_port (from GET /config)
 let vadCfg={ vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:500,
-             vad_prefix_ms:300, vad_min_speech_ms:250 };  // refreshed at call start
+             vad_prefix_ms:500, vad_min_speech_ms:250 };  // refreshed at call start
 let vadRing=null;           // rolling 16 kHz Float32 buffer of the last ~30 s
 const VAD_RING_LEN=16000*30;
 let ringAbs=0;              // absolute samples captured (ring write head)
@@ -1374,13 +1374,13 @@ async function start(){
     vadCfg={ vad_barge_in: s.vad_barge_in!==false,
              vad_threshold: parseFloat(s.vad_threshold)||0.5,
              vad_silence_ms: parseInt(s.vad_silence_ms)||500,
-             vad_prefix_ms: parseInt(s.vad_prefix_ms)||300,
+             vad_prefix_ms: parseInt(s.vad_prefix_ms)||500,
              vad_min_speech_ms: parseInt(s.vad_min_speech_ms)||250 };
     vadDebugBtn.hidden=!s.debug_settings;
     if(s.vad_enabled) armHandsFree(false);   // no persist — it's already saved
   }catch(_){
     vadCfg={vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:500,
-            vad_prefix_ms:300, vad_min_speech_ms:250};
+            vad_prefix_ms:500, vad_min_speech_ms:250};
   }
 }
 function tickTimer(){
@@ -1612,7 +1612,7 @@ async function loadSettings(){
   $("#set_vad_thresh").value=vth; $("#set_vad_threshval").textContent=Number(vth).toFixed(2).replace(/0$/,"");
   const vsil=(s.vad_silence_ms!=null?s.vad_silence_ms:500);
   $("#set_vad_silence").value=vsil; $("#set_vad_silenceval").textContent=vsil+" ms";
-  const vpre=(s.vad_prefix_ms!=null?s.vad_prefix_ms:300);
+  const vpre=(s.vad_prefix_ms!=null?s.vad_prefix_ms:500);
   $("#set_vad_prefix").value=vpre; $("#set_vad_prefixval").textContent=vpre+" ms";
   const vmin=(s.vad_min_speech_ms!=null?s.vad_min_speech_ms:250);
   $("#set_vad_minspeech").value=vmin; $("#set_vad_minspeechval").textContent=vmin+" ms";
@@ -2284,7 +2284,7 @@ function handleVadEvents(events){
       if(pendingStartMs===null) continue;              // start was suppressed
       const startMs=pendingStartMs; pendingStartMs=null;
       const sil=(vadCfg&&vadCfg.vad_silence_ms)||500;
-      const prefix=(vadCfg&&vadCfg.vad_prefix_ms)||300;
+      const prefix=(vadCfg&&vadCfg.vad_prefix_ms)||500;
       // start already has the prefix subtracted, so true speech excludes it
       const speechMs=(e.ms-sil)-(startMs+prefix);
       if(speechMs < ((vadCfg&&vadCfg.vad_min_speech_ms)||250)){

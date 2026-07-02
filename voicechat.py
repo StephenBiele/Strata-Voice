@@ -202,7 +202,8 @@ def _now_context() -> str:
 
 
 def build_messages(history, memories, documents=None, profile=None,
-                   persona: str | None = None, recent=None) -> list[dict]:
+                   persona: str | None = None, recent=None,
+                   forgotten=None) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
 
     `persona` is the user-editable part; the fixed MEMORY_DIRECTIVES are
@@ -218,6 +219,11 @@ def build_messages(history, memories, documents=None, profile=None,
                " Use this for time-aware replies (greetings, time of day, \"today\"); "
                "don't state the date or time unless it's relevant.")
     system += f"\n\nCURRENT MEMORIES:\n{mem_block}"
+    if forgotten:
+        joined = "\n".join(f"- {f}" for f in forgotten)
+        system += ("\n\nDELETED THIS CONVERSATION (the user asked to forget these — they may "
+                   "still appear in the chat history above, but never mention or allude to "
+                   "them again unless the user brings them up first):\n" + joined)
     if recent:
         joined = "\n".join(f"- {r}" for r in recent)
         system += ("\n\nRECENT CONVERSATIONS (recaps of earlier sessions, surfaced because "
@@ -302,8 +308,9 @@ def llm_reply(history: list[dict], memories: list[str],
               profile: str | None = None,
               persona: str | None = None,
               cfg: dict | None = None,
-              recent=None) -> str:
-    messages = build_messages(history, memories, documents, profile, persona, recent)
+              recent=None, forgotten=None) -> str:
+    messages = build_messages(history, memories, documents, profile, persona, recent,
+                              forgotten=forgotten)
     return llm_complete(messages, cfg)
 
 
@@ -363,10 +370,14 @@ def llm_stream(messages: list[dict], cfg: dict | None = None):
 
 
 # ---- memory directive parsing ------------------------------------------------
-def apply_directives(strata, reply: str, memories: list[dict]) -> str:
+def apply_directives(strata, reply: str, memories: list[dict],
+                     forgotten: list[str] | None = None) -> str:
     """Strip [MEM_ADD]/[MEM_DEL] lines from the reply and apply them to Strata.
 
-    Returns the clean, speakable text.
+    Returns the clean, speakable text. When ``forgotten`` is given, deleted
+    keywords are appended to it so the caller can keep the model from
+    referencing them for the rest of the session (they'd otherwise linger in
+    the chat history and keep coming up after the user asked to forget them).
     """
     spoken: list[str] = []
     for line in reply.splitlines():
@@ -379,6 +390,8 @@ def apply_directives(strata, reply: str, memories: list[dict]) -> str:
             kw = s[len("[MEM_DEL]"):].strip()
             if kw:
                 _forget(strata, kw, memories)
+                if forgotten is not None:
+                    forgotten.append(kw)
         else:
             spoken.append(line)
     return "\n".join(spoken).strip()
@@ -605,21 +618,31 @@ If nothing durable is stated, return [].
 
 Existing memory (do not duplicate):
 {existing}
-
+{context}
 User message:
 "{text}"
 
 JSON array:"""
 
 
-def extract_facts_llm(user_text: str, existing: list[str], cfg: dict | None = None) -> list[str]:
+def extract_facts_llm(user_text: str, existing: list[str], cfg: dict | None = None,
+                      context: str | None = None) -> list[str]:
     """Ask the configured model to extract durable facts as a JSON array.
-    Runs after the spoken reply, so it never adds latency to speech."""
+    Runs after the spoken reply, so it never adds latency to speech.
+    ``context`` is the last few conversation turns — it lets a fragment like
+    "it's next Tuesday" resolve to the thing being discussed, instead of being
+    skipped as meaningless on its own."""
     text = (user_text or "").strip()
     if not text:
         return []
+    ctx = ""
+    if context:
+        ctx = ("\nRecent conversation (context ONLY — resolve references with it, "
+               "but extract facts ONLY from the latest user message below):\n"
+               + context + "\n")
     prompt = _EXTRACT_PROMPT.format(
-        existing="\n".join(f"- {m}" for m in existing) or "(none)", text=text)
+        existing="\n".join(f"- {m}" for m in existing) or "(none)", text=text,
+        context=ctx)
     try:
         raw = llm_complete([{"role": "user", "content": prompt}],
                            {**(cfg or {}), "thinking": False})
@@ -656,6 +679,56 @@ def add_facts(strata, facts: list[str], event_id: int | None = None) -> list[str
         if f not in before:
             added.append(f)
     return added
+
+
+_HARVEST_PROMPT = """You review a finished voice conversation and pull out the durable facts about the USER \
+that should be kept in long-term memory. You see the whole transcript, so COMBINE details that were \
+spread across turns into complete facts (e.g. an interview mentioned in one turn, its day in another, \
+and the role in a third become one fact: "Has an interview next Tuesday with the VP for a builder role \
+building internal tools").
+The transcript is from speech recognition and may contain mis-transcriptions and clipped sentence \
+starts — never copy garbled wording; write each fact cleanly, and skip what you can't confidently parse.
+Return ONLY a JSON array of short factual strings in the third person.
+Include: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, \
+upcoming commitments (interviews, appointments, deadlines), notable experience and accomplishments.
+Exclude: questions, tests of the assistant, requests to remember/forget, anything about the assistant \
+itself, fleeting small talk, and anything already covered by existing memory.
+If nothing new and durable was said, return [].
+
+Existing memory (do not duplicate or restate):
+{existing}
+
+Transcript:
+{transcript}
+
+JSON array:"""
+
+
+def harvest_session_facts(turns: list[dict], existing: list[str],
+                          cfg: dict | None = None) -> list[str]:
+    """End-of-conversation fact harvest: one extraction pass over the WHOLE
+    transcript (both sides), so facts scattered across turns get assembled into
+    complete memories that per-turn extraction can't see. Pure function — the
+    caller decides how to store the result."""
+    if not turns:
+        return []
+    prompt = _HARVEST_PROMPT.format(
+        existing="\n".join(f"- {m}" for m in existing) or "(none)",
+        transcript=_transcript_text(turns))
+    try:
+        raw = llm_complete([{"role": "user", "content": prompt}],
+                           {**(cfg or {}), "thinking": False})
+    except Exception as e:
+        print(f"[memory] harvest call failed: {e}")
+        return []
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except Exception:
+        return []
+    return [_clean(x) for x in arr if isinstance(x, str) and len(_clean(x)) > 2][:8]
 
 
 # ---- events & timeline (episodic spine) --------------------------------------

@@ -86,7 +86,9 @@ DEFAULT_SETTINGS = {
     "vad_barge_in": True,                # speaking while it talks interrupts it
     "vad_threshold": 0.5,                # voice sensitivity (higher = stricter)
     "vad_silence_ms": 500,               # pause length that ends your turn
-    "vad_prefix_ms": 300,                # lead-in audio kept before speech began
+    "vad_prefix_ms": 500,                # lead-in kept from before speech was DETECTED
+                                         # (detection can lag soft starts by 300-400ms,
+                                         # so a short lead-in clips first words)
     "vad_min_speech_ms": 250,            # ignore blips shorter than this
     "debug_settings": False,             # show the in-call tuning panel
 }
@@ -175,6 +177,9 @@ _mem_jobs: "queue.Queue" = queue.Queue()
 
 _history: list[dict] = []
 _session: dict | None = None   # the in-progress call
+_forgotten: list[str] = []     # keywords deleted THIS session — the model is told
+                               # to never reference them again (they linger in the
+                               # chat history, which is how "Pixel" kept coming up)
 
 
 # ---- persistence -------------------------------------------------------------
@@ -417,7 +422,7 @@ def _memory_worker() -> None:
                 return
             if st is None:
                 continue
-            text, event_id, cfg, candidate = job
+            text, event_id, cfg, candidate, ctx = job
             # explicit "remember …" first: the smoothing layer judges + rewrites
             # it (or falls back to verbatim if the LLM is unreachable) so an
             # explicit command is never lost and never stored as garble.
@@ -429,7 +434,7 @@ def _memory_worker() -> None:
                     if added:
                         print("[memory] remembered:", added)
             existing = [m["text"] for m in vc.list_memories(st)]   # read, off-lock
-            new_facts = vc.extract_facts_llm(text, existing, cfg)  # slow LLM, off-lock
+            new_facts = vc.extract_facts_llm(text, existing, cfg, context=ctx)  # slow LLM, off-lock
             if new_facts:
                 with _lock:                                        # brief write, serialized
                     added = vc.add_facts(st, new_facts, event_id)
@@ -793,10 +798,20 @@ def _doc_context() -> list[str]:
 
 
 # ---- sessions ----------------------------------------------------------------
+def _recent_context(max_entries: int = 6) -> str:
+    """The last few exchanges (excluding the just-appended current one) as plain
+    text, for reference resolution in the background fact extraction."""
+    prior = _history[:-2] if len(_history) >= 2 else []
+    tail = prior[-max_entries:]
+    return "\n".join(f"{'User' if t['role']=='user' else 'Assistant'}: {t['content']}"
+                     for t in tail)
+
+
 def _start_session() -> None:
-    global _session, _history
+    global _session, _history, _forgotten
     _finalize_session()
     _history = []
+    _forgotten = []
     _session = {
         "id": str(int(time.time() * 1000)),
         "started_at": time.time(),
@@ -825,23 +840,36 @@ def _finalize_session() -> None:
 
 
 def _recap_session(sess: dict) -> None:
-    """Background: recap one finished session into Strata's episodic layer.
-    Same discipline as _backfill_recaps — slow LLM call off-lock, brief writes
-    under _lock. If the process dies first, the startup backfill catches it."""
+    """Background: recap one finished session into Strata's episodic layer, then
+    harvest durable facts from the WHOLE transcript. The harvest is what catches
+    facts scattered across turns ("I have an interview" … "it's next Tuesday" …
+    "it's a builder role") that per-turn extraction can't assemble.
+    Same discipline as _backfill_recaps — slow LLM calls off-lock, brief writes
+    under _lock. If the process dies first, the startup backfill catches the recap."""
     try:
         recap = vc.summarize_session(sess["turns"], _llm_cfg())   # slow, off-lock
-        if not recap:
-            return
-        with _lock:
-            vc.record_summary(_strata, recap, ts_ms=int(sess["ended_at"] * 1000))
-            cur = _read_json(SESSIONS_FILE, [])
-            for c in cur:
-                if c.get("id") == sess["id"]:
-                    c["summary"] = recap
-            _write_json(SESSIONS_FILE, cur)
-        print("[recap]", recap)
+        if recap:
+            with _lock:
+                vc.record_summary(_strata, recap, ts_ms=int(sess["ended_at"] * 1000))
+                cur = _read_json(SESSIONS_FILE, [])
+                for c in cur:
+                    if c.get("id") == sess["id"]:
+                        c["summary"] = recap
+                _write_json(SESSIONS_FILE, cur)
+            print("[recap]", recap)
     except Exception as e:
         print("[recap] finalize failed:", e)
+    try:
+        with _lock:
+            existing = [m["text"] for m in vc.list_memories(_strata)]
+        facts = vc.harvest_session_facts(sess["turns"], existing, _llm_cfg())  # slow, off-lock
+        if facts:
+            with _lock:
+                added = vc.add_facts(_strata, facts)
+            if added:
+                print("[memory] harvested:", added)
+    except Exception as e:
+        print("[memory] harvest failed:", e)
 
 
 def _persist_session() -> None:
@@ -870,7 +898,8 @@ def _handle_turn(wav_bytes: bytes) -> dict:
         captured = vc.capture_memory(_strata, text, event_id)   # forgets only, immediate
         if captured:
             print("[memory]", captured)
-        _mem_jobs.put((text, event_id, _llm_cfg(), vc.remember_candidate(text)))
+        _mem_jobs.put((text, event_id, _llm_cfg(), vc.remember_candidate(text),
+                       _recent_context()))
         mem = vc.list_memories(_strata)
         mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
         recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
@@ -879,8 +908,9 @@ def _handle_turn(wav_bytes: bytes) -> dict:
             _history, mem_text,
             documents=_doc_context(), profile=_profile_context(),
             persona=s["persona"], cfg=_llm_cfg(), recent=recent,
+            forgotten=_forgotten,
         )
-        reply = vc.apply_directives(_strata, reply_raw, mem)
+        reply = vc.apply_directives(_strata, reply_raw, mem, forgotten=_forgotten)
         _history.append({"role": "assistant", "content": reply})
 
         # transcript
@@ -919,6 +949,9 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         captured = vc.capture_memory(_strata, text, event_id)   # forgets only, immediate
         if captured:
             print("[memory]", captured)
+            for c in captured:
+                if c.startswith("- forget: "):
+                    _forgotten.append(c[len("- forget: "):])
 
     s = _settings()
     mem = vc.list_memories(_strata)
@@ -935,7 +968,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     messages = vc.build_messages(
         _history, mem_text,
         documents=_doc_context(), profile=_profile_context(), persona=s["persona"],
-        recent=recent,
+        recent=recent, forgotten=_forgotten,
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
@@ -1006,7 +1039,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     # parse directives (incognito: apply_directives still strips them from the
     # spoken text, but nothing is written because private turns emit none and the
     # persistence/extraction below is skipped)
-    reply = vc.apply_directives(_strata, full, mem)
+    reply = vc.apply_directives(_strata, full, mem, forgotten=_forgotten)
     _history.append({"role": "assistant", "content": reply})   # ephemeral
 
     if not private:
@@ -1017,9 +1050,11 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         _persist_session()
         # Memory writes go through the background smoothing layer: an explicit
         # "remember …" clause is polished (judged + rewritten) before storage,
-        # and the LLM extraction pass distills everything else. Nothing is
-        # stored verbatim, and none of it delays the next turn.
-        _mem_jobs.put((text, event_id, _llm_cfg(), vc.remember_candidate(text)))
+        # and the LLM extraction pass distills everything else — with the last
+        # few turns as context so fragments like "it's next Tuesday" resolve.
+        # Nothing is stored verbatim, and none of it delays the next turn.
+        _mem_jobs.put((text, event_id, _llm_cfg(), vc.remember_candidate(text),
+                       _recent_context()))
 
     memories = [m["text"] for m in vc.list_memories(_strata)]
     yield {"type": "done", "reply": reply, "memories": memories,
