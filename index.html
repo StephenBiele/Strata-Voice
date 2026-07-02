@@ -127,10 +127,10 @@
   #incognitoBtn[aria-checked="true"]{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
   #incognitoBtn[aria-checked="true"]:hover{ background:var(--ink); color:var(--paper); }
   body.private .byline{ color:var(--ink-soft); font-weight:600; }
-  /* hands-free toggle: "on" state (sage, so it reads differently from incognito) */
-  #handsFreeBtn[aria-checked="true"]{ background:var(--sage-deep); color:var(--paper); border-color:var(--sage-deep); }
-  #handsFreeBtn[aria-checked="true"]:hover{ background:var(--sage-deep); color:var(--paper); }
-  #handsFreeBtn[disabled]{ opacity:.55; cursor:default; }
+  /* "Manual turns" menu item: checkmark when push-to-talk mode is active */
+  #menuManual{ display:flex; align-items:center; justify-content:space-between; gap:.7rem; }
+  #menuManual::after{ content:"✓"; color:var(--sage-deep); font-weight:700; opacity:0; transition:opacity .15s var(--ease); }
+  #menuManual[aria-checked="true"]::after{ opacity:1; }
   .calltools{ justify-self:end; display:inline-flex; align-items:center; gap:.5rem; }
   .callmenu-wrap{ position:relative; }
   .callmenu[hidden]{ display:none; }   /* .callmenu sets display:flex, which would otherwise beat [hidden] */
@@ -337,7 +337,13 @@
   @keyframes tdot{ 0%,100%{ opacity:.25; transform:scale(.8); } 50%{ opacity:1; transform:scale(1); } }
 
   /* controls */
-  .controls{ display:flex; align-items:center; gap:.9rem; }
+  /* one row, one vocabulary: 48px icon circles at the edges, composer between.
+     Mode classes keep the row honest — live shows mute, manual shows the hold
+     pill; never both (live means "just talk", manual means "wait for release"). */
+  .controls{ display:flex; align-items:center; justify-content:center; gap:.8rem; width:min(560px,90vw); }
+  #call.mode-live .ptt{ display:none; }
+  #call.mode-manual #muteBtn{ display:none; }
+  #call.call-ended .controls{ display:none; }
   .ptt{
     appearance:none; border:none; cursor:pointer; font-family:inherit; user-select:none;
     -webkit-user-select:none; touch-action:none;
@@ -356,38 +362,48 @@
   .ptt.active .dot{ background:var(--paper); transform:scale(1.25); }
   .ptt:disabled{ opacity:.45; cursor:default; }
 
-  .end{
-    appearance:none; cursor:pointer; font-family:inherit; font-size:.92rem; font-weight:600;
-    color:var(--clay); background:transparent; border:1px solid oklch(0.60 0.12 38 / .35);
-    padding:.86em 1.3em; border-radius:999px;
-    display:inline-flex; align-items:center; gap:.55em;
-    transition:background .2s var(--ease), transform .14s var(--ease);
-  }
-  .end:hover{ background:oklch(0.60 0.12 38 / .08); }
-  .end .sq{ width:.6em; height:.6em; border-radius:2px; background:var(--clay); }
-
-  /* mute: standard mic icon, neutral until muted — then unmistakably red */
-  .mutebtn{
-    appearance:none; cursor:pointer; width:3.1em; height:3.1em; border-radius:999px;
+  /* shared control circle: every icon control in the row is the same 48px shape */
+  .ctl{
+    appearance:none; cursor:pointer; flex:none; width:48px; height:48px; border-radius:50%;
     border:1px solid var(--line); background:oklch(0.99 0.01 120 / .62); color:var(--ink-soft);
     display:inline-flex; align-items:center; justify-content:center;
-    transition:background .2s var(--ease), color .2s var(--ease), transform .14s var(--ease);
+    box-shadow:0 10px 24px -20px oklch(0.4 0.05 130 / .8);
+    transition:background .2s var(--ease), color .2s var(--ease),
+               border-color .2s var(--ease), transform .14s var(--ease);
   }
-  .mutebtn:hover{ color:var(--ink); transform:translateY(-1px); }
-  .mutebtn svg{ width:1.25em; height:1.25em; }
-  .mutebtn .ic-micoff{ display:none; }
-  .mutebtn[aria-pressed="true"]{ background:var(--danger); border-color:var(--danger); color:#fff; }
-  .mutebtn[aria-pressed="true"]:hover{ background:var(--danger); color:#fff; }
-  .mutebtn[aria-pressed="true"] .ic-mic{ display:none; }
-  .mutebtn[aria-pressed="true"] .ic-micoff{ display:block; }
+  .ctl:hover{ color:var(--ink); transform:translateY(-1px); }
+  .ctl svg{ width:1.35rem; height:1.35rem; }
+  /* mute: neutral mic when live, unmistakable red slash when it can't hear you */
+  .ctl .ic-micoff{ display:none; }
+  #muteBtn[aria-pressed="true"]{ background:var(--danger); border-color:var(--danger); color:#fff; }
+  #muteBtn[aria-pressed="true"]:hover{ background:var(--danger); color:#fff; transform:none; }
+  #muteBtn[aria-pressed="true"] .ic-mic{ display:none; }
+  #muteBtn[aria-pressed="true"] .ic-micoff{ display:block; }
+  /* end: same circle, clay-tinted so it reads as "leave" without shouting */
+  .ctl-end{ color:var(--clay); border-color:oklch(0.60 0.12 38 / .4); }
+  .ctl-end:hover{ color:var(--clay); background:oklch(0.60 0.12 38 / .08); }
 
-  /* conversation ended: stay on the page, offer a fresh start */
-  #call.call-ended .mutebtn, #call.call-ended .ptt{ display:none; }
-  #call.call-ended .end{ color:var(--sage-deep); border-color:oklch(0.66 0.10 133 / .45); }
-  #call.call-ended .end:hover{ background:oklch(0.66 0.10 133 / .08); }
-  #call.call-ended .end .sq{ background:var(--sage-deep); border-radius:50%; }
+  /* composer lives inside the row and takes the middle */
+  .controls .callcomposer{ flex:1; min-width:0; width:auto; margin:0; }
+
+  /* orb muted state: still and dimmed — the visual for "it cannot hear me" */
+  #call.muted .cluster{ filter:saturate(.35); opacity:.55; transition:filter .3s var(--ease), opacity .3s var(--ease); }
+  #call.muted .breath{ animation-play-state:paused; }
+  #call.muted .ring{ opacity:0 !important; animation:none; }
+  #call.muted .halo, #call.muted .aura{ opacity:.15; }
+
+  /* conversation ended: controls give way to a single fresh-start action */
   #call.call-ended .orbwrap{ opacity:.55; }
-  #endedHome{ margin-top:.4rem; }
+  .newconvo{
+    appearance:none; cursor:pointer; font-family:inherit; font-size:.95rem; font-weight:600;
+    color:var(--paper); background:linear-gradient(180deg, var(--sage-deep), var(--sage-edge));
+    border:none; padding:.9em 1.6em; border-radius:999px;
+    box-shadow:0 14px 30px -18px oklch(0.5 0.09 133 / .9);
+    transition:transform .14s var(--ease), box-shadow .2s var(--ease);
+  }
+  .newconvo:hover{ transform:translateY(-1px); }
+  .newconvo[hidden]{ display:none; }
+  #endedHome{ margin-top:.1rem; }
   #endedHome[hidden]{ display:none; }
 
   .memflash{
@@ -911,15 +927,13 @@
         <div class="byline">connected</div>
       </div>
       <div class="calltools">
-        <button class="history-toggle iconbtn" id="handsFreeBtn" role="switch" aria-checked="false" aria-label="Hands-free — talk without holding" title="Hands-free — talk without holding">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg>
-        </button>
         <button class="history-toggle iconbtn" id="incognitoBtn" role="switch" aria-checked="false" aria-label="Incognito — don't save this conversation" title="Incognito — don't save this conversation">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13c0-3.3 3.6-6 8-6s8 2.7 8 6v4.5a1.5 1.5 0 0 1-2.4 1.2L15 17.5l-1.8 1.3a2 2 0 0 1-2.4 0L9 17.5l-2.6 1.2A1.5 1.5 0 0 1 4 17.5z"/><circle cx="9.5" cy="12.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="12.5" r="1.1" fill="currentColor" stroke="none"/></svg>
         </button>
         <div class="callmenu-wrap">
           <button class="history-toggle iconbtn" id="callMenuBtn" aria-haspopup="true" aria-expanded="false" aria-label="Open menu" title="Menu"><span class="icon">⋯</span></button>
           <div class="callmenu" id="callMenu" hidden role="menu">
+            <button id="menuManual" role="menuitemcheckbox" aria-checked="false" title="It waits until you release before thinking — instead of live conversation">Manual turns</button>
             <button data-view="memory" role="menuitem">Memory</button>
             <button data-view="profile" role="menuitem">Profile</button>
             <button data-view="settings" role="menuitem">Settings</button>
@@ -953,18 +967,21 @@
       </div>
       <p class="caption" id="caption" aria-live="polite"></p>
       <div class="controls">
-        <button class="mutebtn" id="muteBtn" aria-pressed="false" aria-label="Mute microphone" title="Mute — it stops hearing you until you unmute">
+        <button class="ctl" id="muteBtn" aria-pressed="false" aria-label="Mute microphone" title="Mute — it stops hearing you until you unmute">
           <svg class="ic-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
           <svg class="ic-micoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6a3 3 0 0 1 6 0v5"/><path d="M5 11a7 7 0 0 0 11.4 5.4M19 11a7 7 0 0 1-.36 2.2M12 18v3M3 3l18 18"/></svg>
         </button>
         <button class="ptt" id="pttBtn"><span class="dot"></span><span id="pttLabel">Hold to talk</span></button>
-        <button class="end" id="endBtn"><span class="sq"></span><span id="endLabel">End call</span></button>
+        <form class="callcomposer" id="callComposer">
+          <input id="callChatInput" type="text" autocomplete="off" placeholder="Type a message" aria-label="Type a message">
+          <button type="submit" class="sendbtn" aria-label="Send message">Send</button>
+        </form>
+        <button class="ctl ctl-end" id="endBtn" aria-label="End conversation" title="End conversation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
       </div>
+      <button class="newconvo" id="newConvoBtn" hidden>Start a new conversation</button>
       <button class="textlink" id="endedHome" hidden>Back to home</button>
-      <form class="callcomposer" id="callComposer">
-        <input id="callChatInput" type="text" autocomplete="off" placeholder="…or type a message" aria-label="Type a message">
-        <button type="submit" class="sendbtn" aria-label="Send message">Send</button>
-      </form>
     </div>
     <div class="memflash" id="memflash">✦ <span>committed to memory</span></div>
     <aside class="chatdrawer" id="chatSidebar" aria-label="Conversation">
@@ -1095,14 +1112,14 @@
       </div>
       <div class="teststatus" id="set_asrstatus"></div>
 
-      <h3 class="subhead">Hands-free</h3>
-      <p class="hint" style="margin:-.4rem 0 1rem">Talk without holding — it detects when you start and stop speaking. The mic stays open for the whole call while this is on.</p>
+      <h3 class="subhead">Talking</h3>
+      <p class="hint" style="margin:-.4rem 0 1rem">By default conversations are live — it hears when you start and stop speaking, and the mic stays open for the whole call.</p>
       <div class="switchrow">
         <div>
-          <div class="switchlabel">Hands-free mode</div>
-          <div class="switchsub">On by default — just talk, and your turn is sent when you pause. Turn off to talk by holding the orb instead.</div>
+          <div class="switchlabel">Manual turns (push to talk)</div>
+          <div class="switchsub">It waits until you release before thinking: hold the orb or the button to speak. The mic only opens while you hold.</div>
         </div>
-        <button class="switch" id="set_vad_enabled" role="switch" aria-checked="false"><span class="knob"></span></button>
+        <button class="switch" id="set_manual" role="switch" aria-checked="false"><span class="knob"></span></button>
       </div>
       <div class="switchrow">
         <div>
@@ -1406,8 +1423,12 @@ async function openDrawerCurrent(){
    otherwise keep it under the orb */
 function dockComposer(){
   const inSidebar = !call.classList.contains("history-collapsed") && drawerView==="current";
-  const target = inSidebar ? drawerFoot : callComposerHome;
-  if(callComposer.parentNode !== target) target.appendChild(callComposer);
+  if(inSidebar){
+    if(callComposer.parentNode !== drawerFoot) drawerFoot.appendChild(callComposer);
+  }else if(callComposer.parentNode !== callComposerHome){
+    // home is the controls row — the composer sits between the talk control and X
+    callComposerHome.insertBefore(callComposer, endBtn);
+  }
 }
 
 /* ---------- start / end ---------- */
@@ -1416,7 +1437,7 @@ async function start(){
   // leaving a previous "conversation ended" state (New conversation / re-entry)
   callEnded=false;
   call.classList.remove("call-ended");
-  document.getElementById("endLabel").textContent="End call";
+  document.getElementById("newConvoBtn").hidden=true;
   document.getElementById("endedHome").hidden=true;
   if(bylineEl) bylineEl.textContent = incognito ? "incognito · not saved" : "connected";
   ac = new (window.AudioContext||window.webkitAudioContext)();
@@ -1438,9 +1459,11 @@ async function start(){
   currentSessionId=null; drawerView="current";   // fresh call defaults to the live view
   setHistoryCollapsed(true);   // start with the panel closed — open it from ☰ when wanted
   showView("call");
+  // optimistic: live is the default talk mode; settings/arming below correct it
+  call.classList.add("mode-live"); call.classList.remove("mode-manual");
   callStart=Date.now(); timerInt=setInterval(tickTimer,1000); tickTimer();
   setState("idle"); levelLoop();
-  // hands-free: pull the effective VAD settings; auto-arm if enabled
+  // talk mode: pull the effective VAD settings; arm live mode if enabled
   try{
     const s=await (await fetch("/settings")).json();
     micDevice=s.mic_device||"";
@@ -1451,9 +1474,11 @@ async function start(){
              vad_min_speech_ms: parseInt(s.vad_min_speech_ms)||250 };
     vadDebugBtn.hidden=!s.debug_settings;
     if(s.vad_enabled) armHandsFree(false);   // no persist — it's already saved
+    else applyMode();                        // manual turns: show the hold pill
   }catch(_){
     vadCfg={vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:500,
             vad_prefix_ms:500, vad_min_speech_ms:250};
+    applyMode();
   }
 }
 function tickTimer(){
@@ -1474,14 +1499,15 @@ function end(){
   started=false; holding=false; busy=false;
   if(muted) setMuted(false);
   fetch("/end",{method:"POST"}).catch(()=>{});
-  callComposerHome.appendChild(callComposer);   // return composer to center for next call
+  if(callComposer.parentNode !== callComposerHome)
+    callComposerHome.insertBefore(callComposer, endBtn);   // back into the controls row
   // stay right here in an "ended" state — no jarring jump back to the landing
   // page. The End button becomes "New conversation"; a quiet link goes home.
   callEnded=true;
   call.classList.add("call-ended");
   if(bylineEl) bylineEl.textContent="conversation ended";
   hideCaption();
-  document.getElementById("endLabel").textContent="New conversation";
+  document.getElementById("newConvoBtn").hidden=false;
   document.getElementById("endedHome").hidden=false;
   setState("idle");   // paints the "conversation ended" hint
 }
@@ -1687,7 +1713,7 @@ async function loadSettings(){
   $("#set_maxtokens").value=(s.llm_max_tokens!=null?s.llm_max_tokens:0);
   $("#set_numctx").value=(s.llm_num_ctx!=null?s.llm_num_ctx:0);
   // hands-free (VAD)
-  setSwitch($("#set_vad_enabled"), !!s.vad_enabled);
+  setSwitch($("#set_manual"), s.vad_enabled===false);   // manual = NOT live
   setSwitch($("#set_vad_bargein"), s.vad_barge_in!==false);
   setSwitch($("#set_debug"), !!s.debug_settings);
   const vth=(s.vad_threshold!=null?s.vad_threshold:0.5);
@@ -1777,7 +1803,7 @@ async function saveSettings(){
     asr_backend:asr?asr.backend:undefined,
     mic_device:$("#set_micdev").value,
     memory_model:$("#set_memmodel").value,
-    vad_enabled:$("#set_vad_enabled").getAttribute("aria-checked")==="true",
+    vad_enabled:$("#set_manual").getAttribute("aria-checked")!=="true",   // manual switch is inverted
     vad_barge_in:$("#set_vad_bargein").getAttribute("aria-checked")==="true",
     vad_threshold:parseFloat($("#set_vad_thresh").value),
     vad_silence_ms:parseInt($("#set_vad_silence").value,10),
@@ -2426,28 +2452,40 @@ async function vadStartSession(){
   }catch(_){ return false; }
 }
 
+/* Reflect the RUNTIME talk mode on the UI: live (VAD armed) shows the mute
+   control; manual (not armed — by choice or because arming failed) shows the
+   hold-to-talk pill. One mode's controls at a time, never both. */
+function applyMode(){
+  call.classList.toggle("mode-live", handsFree);
+  call.classList.toggle("mode-manual", !handsFree);
+  const mm=document.getElementById("menuManual");
+  if(mm) mm.setAttribute("aria-checked", handsFree ? "false" : "true");
+}
+
+let _arming=false;
 async function armHandsFree(persist){
-  if(handsFree || !started) return;
+  if(handsFree || !started || _arming) return;
+  _arming=true;
   ensureAudio();
-  handsFreeBtn.disabled=true;
-  statusEl.textContent="hands-free: warming up…";
+  statusEl.textContent="warming up…";
   if(!vadBase){
     try{ const c=await (await fetch("/config")).json();
          vadBase=`http://${location.hostname}:${c.vad_port||8766}`; }catch(_){}
   }
   if(!micStream){
     const ok=await acquireMic();
-    if(!ok){ handsFreeBtn.disabled=false; setState("idle"); return; }
+    if(!ok){ _arming=false; applyMode(); setState("idle"); return; }
   }
   const ok=await vadStartSession();
-  handsFreeBtn.disabled=false;
+  _arming=false;
   if(!ok){
-    statusEl.textContent="hands-free unavailable — hold to talk";
+    statusEl.textContent="live mode unavailable — hold to talk";
     if(!holding) releaseMic();
+    applyMode();
     return;
   }
   handsFree=true; vadFailures=0;
-  handsFreeBtn.setAttribute("aria-checked","true");
+  applyMode();
   setState(state);   // refresh the idle hint
   if(persist) persistSettings({vad_enabled:true});
 }
@@ -2455,7 +2493,7 @@ async function armHandsFree(persist){
 function disarmHandsFree(persist){
   if(!handsFree) return;
   handsFree=false;
-  handsFreeBtn.setAttribute("aria-checked","false");
+  applyMode();
   if(vadBase) fetch(vadBase+"/vad/stop",{method:"POST"}).catch(()=>{});
   pendingStartMs=null; feedChunks=[]; feedLen=0;
   if(!holding) releaseMic();   // OS mic light turns off again
@@ -2465,7 +2503,7 @@ function disarmHandsFree(persist){
 
 function autoDisarm(){
   disarmHandsFree(false);
-  statusEl.textContent="hands-free unavailable — hold to talk";
+  statusEl.textContent="live mode unavailable — hold to talk";
 }
 
 /* Mute = the machine cannot hear you: the mic device is released outright (OS
@@ -2477,6 +2515,7 @@ function setMuted(on){
   muteBtn.setAttribute("aria-pressed", on?"true":"false");
   muteBtn.title = on ? "Unmute — start listening again"
                      : "Mute — it stops hearing you until you unmute";
+  call.classList.toggle("muted", on);   // orb goes still + dim: "it cannot hear me"
   if(on){
     pendingStartMs=null;               // drop any half-heard utterance
     if(!holding) releaseMic();         // OS mic light off
@@ -2496,18 +2535,18 @@ function persistSettings(partial){
 
 /* ---------- events ---------- */
 $("#beginBtn").addEventListener("click", start);
-endBtn.addEventListener("click", ()=>{ callEnded ? start() : end(); });
+endBtn.addEventListener("click", end);
 const muteBtn=$("#muteBtn");
 muteBtn.addEventListener("click", ()=>setMuted(!muted));
 $("#endedHome").addEventListener("click", ()=>showView("landing"));
 historyToggle.addEventListener("click",()=>setHistoryCollapsed(!call.classList.contains("history-collapsed")));
 historyClose.addEventListener("click",()=>setHistoryCollapsed(true));
-// hands-free: talk without holding — Silero VAD detects start/stop of speech
-const handsFreeBtn=$("#handsFreeBtn");
-handsFreeBtn.addEventListener("click",()=>{
-  if(handsFree) disarmHandsFree(true);
-  else armHandsFree(true);
+// "Manual turns" (conversation menu): checked = push-to-talk, unchecked = live
+$("#menuManual").addEventListener("click",()=>{
+  if(handsFree) disarmHandsFree(true);   // -> manual turns
+  else armHandsFree(true);               // -> live conversation
 });
+$("#newConvoBtn").addEventListener("click", start);
 // incognito: this conversation isn't saved or remembered (existing memory is still used)
 const incognitoBtn=$("#incognitoBtn"), bylineEl=document.querySelector("#call .byline");
 incognitoBtn.addEventListener("click",()=>{
@@ -2755,7 +2794,7 @@ $("#set_vad_thresh").addEventListener("input",(e)=>{ $("#set_vad_threshval").tex
 $("#set_vad_silence").addEventListener("input",(e)=>{ $("#set_vad_silenceval").textContent=e.target.value+" ms"; });
 $("#set_vad_prefix").addEventListener("input",(e)=>{ $("#set_vad_prefixval").textContent=e.target.value+" ms"; });
 $("#set_vad_minspeech").addEventListener("input",(e)=>{ $("#set_vad_minspeechval").textContent=e.target.value+" ms"; });
-["set_vad_enabled","set_vad_bargein","set_debug"].forEach(id=>{
+["set_manual","set_vad_bargein","set_debug"].forEach(id=>{
   $("#"+id).addEventListener("click",(e)=>{
     const on=e.currentTarget.getAttribute("aria-checked")==="true";
     setSwitch(e.currentTarget, !on);

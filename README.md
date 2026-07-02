@@ -53,8 +53,8 @@ Then:
 
 Ollama starts if needed, the server launches, and your browser opens to
 **http://localhost:8765**. Click **Start conversation**, allow the microphone, and
-**just start talking** — it hears when you speak. (Prefer push-to-talk? Turn hands-free
-off in Settings and hold the orb instead.)
+**just start talking** — it hears when you speak. (Prefer push-to-talk? Flip "Manual
+turns" in the conversation menu.)
 
 > **Requirements:** macOS on Apple Silicon (M1 or newer). Non-interactive installs:
 > `./install.sh --light` or `./install.sh --recommended`. Re-running the installer is
@@ -73,9 +73,11 @@ a debug switch adds an **in-call live tuning panel** so you can dial it in while
 talking. Barge-in leans on your browser's echo cancellation: if it interrupts itself
 through speakers, use headphones.
 
-**Hold to talk** — prefer push-to-talk? Turn hands-free off in Settings and press & hold
-the orb (or the button) to speak; the mic then opens *only while you hold*. Ending a
-conversation keeps you on the call page — one tap starts the next conversation.
+**Manual turns** — prefer push-to-talk? Flip "Manual turns" in the conversation menu (or
+Settings) and it waits until you release before thinking: press & hold the orb or the
+button to speak, and the mic opens *only while you hold*. One mode's controls at a time —
+live shows the mute button, manual shows the hold button, never both. Ending a
+conversation keeps you on the call page — one tap starts the next.
 
 **Real memory** — nothing is stored verbatim from a voice transcript. A smoothing layer
 rewrites explicit "remember…" requests into clean third-person facts, a background
