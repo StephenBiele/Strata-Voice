@@ -96,7 +96,10 @@ text share one session, one memory, one timeline.
 **Incognito** — a ghost toggle for off-the-record conversations: nothing is saved, while
 it still uses what it already knows.
 
-**Reference files** — upload a PDF / DOCX / text file (a resume, notes) and ask about it.
+**Reference files** — upload a PDF / DOCX / text file (a resume, notes, a story) and ask
+about it. Small files are given to the model whole; larger ones are chunked and embedded, so
+each question pulls in only the passages relevant to what you asked instead of blowing the
+context window.
 
 **Bring any model** — local Ollama out of the box, or any OpenAI-compatible endpoint
 (llama.cpp, LM Studio, vLLM, OpenAI …). API keys live in the **macOS Keychain**, never

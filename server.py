@@ -164,6 +164,15 @@ def _lang_code(voice: str) -> str:
     return "b" if voice[:1] == "b" else "a"
 DOC_CHAR_CAP = 8000          # per-document text injected into the prompt
 DOC_TOTAL_CAP = 16000        # across all docs
+DOC_WHOLE_CAP = 2400         # docs this small are injected whole (a short story is fine)
+DOC_CHUNK_CHARS = 700        # target passage size when a larger doc is chunked
+DOC_CHUNK_OVERLAP = 1        # sentences of overlap carried between passages
+DOC_TOP_K = 4                # relevant passages pulled from each large doc
+
+# doc_id -> {"n": <char count when embedded>, "chunks": [(text, vector)]}. In-memory
+# only; rebuilt on demand (documents are immutable once uploaded, so keying on id
+# + length is safe). Lets us embed each passage once, then score cheaply per turn.
+_doc_vec_cache: dict = {}
 
 # Loaded once at startup.
 _asr = None
@@ -821,17 +830,82 @@ def _profile_context() -> str:
             "into replies where it isn't needed):\n" + "\n".join(lines)) if lines else ""
 
 
-def _doc_context() -> list[str]:
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n{2,}")
+
+
+def _chunk_doc(text: str) -> list[str]:
+    """Split a document into overlapping ~DOC_CHUNK_CHARS passages on sentence /
+    paragraph boundaries, so retrieval returns coherent excerpts, not fragments."""
+    sents = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
+    chunks, cur = [], []
+    size = 0
+    for s in sents:
+        cur.append(s)
+        size += len(s) + 1
+        if size >= DOC_CHUNK_CHARS:
+            chunks.append(" ".join(cur))
+            cur = cur[-DOC_CHUNK_OVERLAP:] if DOC_CHUNK_OVERLAP else []
+            size = sum(len(x) + 1 for x in cur)
+    if cur and (not chunks or " ".join(cur) != chunks[-1]):
+        chunks.append(" ".join(cur))
+    return chunks
+
+
+def _doc_chunks_embedded(doc: dict) -> list:
+    """Return [(chunk_text, vector)] for a document, embedding once and caching.
+    Returns [] if there's no embedder (caller falls back to whole-text)."""
+    if _embedder is None:
+        return []
+    text = doc.get("text") or ""
+    cached = _doc_vec_cache.get(doc["id"])
+    if cached and cached["n"] == len(text):
+        return cached["chunks"]
+    pairs = []
+    for ch in _chunk_doc(text):
+        try:
+            pairs.append((ch, _embedder.embed(ch)))
+        except Exception as e:
+            print(f"[docs] chunk embed failed: {e}")
+            return []
+    _doc_vec_cache[doc["id"]] = {"n": len(text), "chunks": pairs}
+    return pairs
+
+
+def _doc_context(query: str | None = None) -> list[str]:
+    """Reference-file text for the prompt. Small docs go in whole; larger ones are
+    chunked and only the passages most relevant to `query` are injected (RAG), so
+    a long document doesn't blow the context or get blindly truncated."""
+    from strata.vector.embedder import cosine
     docs = _read_json(DOCS_FILE, [])
+    q = (query or "").strip()
     out, total = [], 0
     for d in docs:
-        txt = (d.get("text") or "")[:DOC_CHAR_CAP]
-        if not txt:
+        text = d.get("text") or ""
+        if not text:
             continue
-        if total + len(txt) > DOC_TOTAL_CAP:
-            txt = txt[: DOC_TOTAL_CAP - total]
-        out.append(f"=== {d.get('name','document')} ===\n{txt}")
-        total += len(txt)
+        name = d.get("name", "document")
+        # whole-document path: small doc, no query, or no embedder available
+        if len(text) <= DOC_WHOLE_CAP or not q or _embedder is None:
+            block = f"=== {name} ===\n{text[:DOC_CHAR_CAP]}"
+        else:
+            chunks = _doc_chunks_embedded(d)
+            if not chunks:                                   # embed failed -> whole
+                block = f"=== {name} ===\n{text[:DOC_CHAR_CAP]}"
+            else:
+                try:
+                    qv = _embedder.embed(q)
+                    ranked = sorted(chunks, key=lambda c: cosine(qv, c[1]), reverse=True)
+                    top = ranked[:DOC_TOP_K]
+                    order = {id(c): i for i, c in enumerate(chunks)}   # restore reading order
+                    top.sort(key=lambda c: order[id(c)])
+                    excerpt = "\n…\n".join(c[0] for c in top)
+                except Exception as e:
+                    print(f"[docs] retrieval failed: {e}")
+                    excerpt = text[:DOC_CHAR_CAP]
+                block = f"=== {name} (excerpts most relevant to the question) ===\n{excerpt}"
+        block = block[: DOC_TOTAL_CAP - total]
+        out.append(block)
+        total += len(block)
         if total >= DOC_TOTAL_CAP:
             break
     return out
@@ -964,7 +1038,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     first_only = chunking == "hybrid"   # hybrid streams only the first sentence early
     messages = vc.build_messages(
         _history, mem_text,
-        documents=_doc_context(), profile=_profile_context(), persona=s["persona"],
+        documents=_doc_context(text), profile=_profile_context(), persona=s["persona"],
         recent=recent, forgotten=_forgotten,
     )
 
@@ -1105,7 +1179,7 @@ def _run_eval() -> dict:
     def ask(question: str) -> str:
         msgs = vc.build_messages(
             [{"role": "user", "content": question}], mems,
-            documents=_doc_context(), profile=_profile_context(), persona=s["persona"])
+            documents=_doc_context(question), profile=_profile_context(), persona=s["persona"])
         return vc.llm_complete(msgs, cfg)
 
     def hit(answer: str, kw: str) -> bool:
@@ -1372,11 +1446,16 @@ class Handler(BaseHTTPRequestHandler):
                    "text": text, "added_at": time.time()}
             docs.append(doc)
             _write_json(DOCS_FILE, docs)
+            # pre-embed chunks now so the first turn that uses this doc is snappy
+            if len(text) > DOC_WHOLE_CAP:
+                try: _doc_chunks_embedded(doc)
+                except Exception as e: print(f"[docs] prewarm failed: {e}")
             return self._json(200, {"ok": True, "id": doc["id"], "name": name,
                                     "chars": len(text)})
         if u.path == "/document/delete":
             body = json.loads(self._body() or b"{}")
             did = str(body.get("id", ""))
+            _doc_vec_cache.pop(did, None)   # evict cached chunk vectors
             docs = [d for d in _read_json(DOCS_FILE, []) if d["id"] != did]
             _write_json(DOCS_FILE, docs)
             return self._json(200, {"ok": True})
