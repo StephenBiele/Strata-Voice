@@ -53,7 +53,8 @@ Then:
 
 Ollama starts if needed, the server launches, and your browser opens to
 **http://localhost:8765**. Click **Start conversation**, allow the microphone, and
-**press and hold the orb to talk** — or flip the waveform toggle and go hands-free.
+**just start talking** — it hears when you speak. (Prefer push-to-talk? Turn hands-free
+off in Settings and hold the orb instead.)
 
 > **Requirements:** macOS on Apple Silicon (M1 or newer). Non-interactive installs:
 > `./install.sh --light` or `./install.sh --recommended`. Re-running the installer is
@@ -63,17 +64,18 @@ Ollama starts if needed, the server launches, and your browser opens to
 
 ## Features
 
-**Voice loop** — press & hold the orb (or the button) to speak; release to send. Press
-while it's talking to cut it off. Mouse or touch, no keyboard needed. The mic opens
-*only while you hold*, so the OS mic indicator stays off between turns.
+**Hands-free by default** — just talk: on-device Silero VAD detects when you start and
+stop speaking and sends your turn automatically. Talking over a reply **interrupts it**
+(barge-in). A **mute button** (red when muted) releases the mic entirely — the OS
+indicator goes dark until you unmute. Every knob is tunable in plain language — voice
+sensitivity, the pause that ends your turn, lead-in padding, minimum speech length — and
+a debug switch adds an **in-call live tuning panel** so you can dial it in while actually
+talking. Barge-in leans on your browser's echo cancellation: if it interrupts itself
+through speakers, use headphones.
 
-**Hands-free mode** *(experimental)* — flip the waveform toggle and just talk: on-device
-Silero VAD detects when you start and stop speaking and sends your turn automatically.
-Talking over a reply **interrupts it** (barge-in). Every knob is tunable in plain
-language — voice sensitivity, the pause that ends your turn, lead-in padding, minimum
-speech length — and a debug switch adds an **in-call live tuning panel** so you can dial
-it in while actually talking. Barge-in leans on your browser's echo cancellation: if it
-interrupts itself through speakers, use headphones.
+**Hold to talk** — prefer push-to-talk? Turn hands-free off in Settings and press & hold
+the orb (or the button) to speak; the mic then opens *only while you hold*. Ending a
+conversation keeps you on the call page — one tap starts the next conversation.
 
 **Real memory** — nothing is stored verbatim from a voice transcript. A smoothing layer
 rewrites explicit "remember…" requests into clean third-person facts, a background

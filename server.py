@@ -88,7 +88,7 @@ DEFAULT_SETTINGS = {
     # write more accurate memories without touching voice latency.
     "memory_model": "",
     # Hands-free (VAD): talk without holding; it detects speech start/stop
-    "vad_enabled": False,                # hands-free mode armed on call start
+    "vad_enabled": True,                 # hands-free is the default talk mode
     "vad_barge_in": True,                # speaking while it talks interrupts it
     "vad_threshold": 0.5,                # voice sensitivity (higher = stricter)
     "vad_silence_ms": 500,               # pause length that ends your turn
