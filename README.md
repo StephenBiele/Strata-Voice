@@ -43,6 +43,16 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
 
 - **Voice loop** — press & hold the orb (or the "Hold to talk" button) to speak; barge-in
   (press to talk while it's speaking to cut it off). Mouse or touch — no keyboard needed.
+- **Hands-free mode (experimental)** — flip the waveform toggle in a call and just talk:
+  on-device voice-activity detection (Silero VAD via mlx-audio) notices when you start and
+  stop speaking and sends your turn automatically. Start talking while it's mid-reply to
+  **interrupt it** (barge-in). Tunable in plain language in Settings — voice sensitivity,
+  the pause that ends your turn, lead-in padding, minimum speech length — and a "Show the
+  in-call tuning panel" debug switch adds a live tuning panel during calls so you can dial
+  in settings while actually talking. Hold-to-talk still works any time and takes
+  precedence. Caveat: barge-in relies on your browser's echo cancellation — if it keeps
+  interrupting itself through speakers, use headphones or turn "Interrupt while it's
+  speaking" off.
 - **Text chat** — "Send a message instead" opens a typed chat; replies stream in and can
   optionally be spoken. Voice and text share one session, memory, and timeline.
 - **Memory hub** — one place for **Timeline** (every turn, with the facts learned in that
@@ -70,8 +80,10 @@ mic → Parakeet V3 TDT (ASR) → LLM (Ollama or any OpenAI-compatible API) → 
 - **Responsive** — phone, tablet, or a small window: panels slide in/out, and the
   conversation becomes a bottom sheet on mobile.
 - **Private by default** — profile, transcripts, memories, and uploads all live under
-  `~/.vui/`; the mic opens only while you're holding to talk. The only network calls are
-  to your chosen LLM (and the local embedder for recall).
+  `~/.vui/`; the mic opens only while you're holding to talk (in hands-free mode it stays
+  open for the call — the OS indicator stays lit — but audio still never leaves the
+  machine). The only network calls are to your chosen LLM (and the local embedder for
+  recall).
 
 ## Requirements
 
@@ -131,6 +143,7 @@ Most things are set in the **Settings** page, but a few startup options are env 
 | `VOICE_LLM_MODEL` | `qwen3.5:4b` | default Ollama model |
 | `VOICE_ASR_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | ASR model id (any mlx-audio STT model: `whisper`, `qwen3_asr`, `moonshine`, …) |
 | `VOICE_ASR_BACKEND` | `mlx-audio` | ASR loader: `mlx-audio` (unified stack) or `parakeet-mlx` (standalone, for A/B) |
+| `VOICE_VAD_PORT` | `8766` | hands-free VAD channel (own port so speech detection keeps working mid-turn) |
 | `OLLAMA_URL` | `http://localhost:11434` | URL endpoint for local Ollama server |
 
 ## How memory works

@@ -126,6 +126,10 @@
   #incognitoBtn[aria-checked="true"]{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
   #incognitoBtn[aria-checked="true"]:hover{ background:var(--ink); color:var(--paper); }
   body.private .byline{ color:var(--ink-soft); font-weight:600; }
+  /* hands-free toggle: "on" state (sage, so it reads differently from incognito) */
+  #handsFreeBtn[aria-checked="true"]{ background:var(--sage-deep); color:var(--paper); border-color:var(--sage-deep); }
+  #handsFreeBtn[aria-checked="true"]:hover{ background:var(--sage-deep); color:var(--paper); }
+  #handsFreeBtn[disabled]{ opacity:.55; cursor:default; }
   .calltools{ justify-self:end; display:inline-flex; align-items:center; gap:.5rem; }
   .callmenu-wrap{ position:relative; }
   .callmenu[hidden]{ display:none; }   /* .callmenu sets display:flex, which would otherwise beat [hidden] */
@@ -137,6 +141,34 @@
   .callmenu button{ appearance:none; border:none; background:none; cursor:pointer; font:inherit;
     font-size:.9rem; font-weight:600; color:var(--ink-soft); text-align:left; padding:.5rem .7rem; border-radius:.55rem; }
   .callmenu button:hover{ background:oklch(0.95 0.03 145); color:var(--ink); }
+
+  /* in-call hands-free tuning panel (debug settings) — top-left on desktop */
+  .vaddebug-wrap{ position:absolute; top:clamp(1.4rem,4vh,2.6rem); left:1.5rem; z-index:7; }
+  .vadpanel[hidden]{ display:none; }
+  .vadpanel{ position:absolute; top:calc(100% + .45rem); left:0;
+    display:flex; flex-direction:column; gap:.55rem; width:min(78vw, 17.5rem); padding:.85rem .9rem;
+    background:oklch(0.99 0.01 120 / .97); border:1px solid var(--line); border-radius:.95rem;
+    box-shadow:0 20px 44px -22px oklch(0.34 0.045 132 / .55);
+    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); }
+  .vadpanel-title{ font-family:"Fraunces",serif; font-size:.98rem; color:var(--ink);
+    display:flex; align-items:baseline; gap:.5rem; }
+  .vadpanel-live{ font-family:"Outfit",sans-serif; font-size:.68rem; font-weight:700; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--sage-deep); }
+  .vadrow label{ display:flex; justify-content:space-between; font-size:.78rem; font-weight:600;
+    color:var(--ink-soft); margin-bottom:.25rem; }
+  .vadrow input[type="range"]{ width:100%; }
+  .vadrow-switch{ display:flex; align-items:center; justify-content:space-between; gap:.8rem; }
+  .vadrow-switch label{ margin:0; }
+  @media (max-width:820px){
+    /* the top-left corner holds the assistant name on small screens — float the
+       tuner bottom-left instead, with the panel opening upward */
+    .vaddebug-wrap{ top:auto; bottom:calc(1.1rem + env(safe-area-inset-bottom)); left:.9rem; }
+    .vadpanel{ top:auto; bottom:calc(100% + .45rem); }
+  }
+  @media (max-width:600px){
+    .vadpanel{ position:fixed; left:.6rem; right:.6rem; width:auto;
+      bottom:calc(env(safe-area-inset-bottom) + 4.6rem); }
+  }
 
   /* orb cluster */
   .orbwrap{
@@ -795,6 +827,34 @@
 
   <!-- CALL -->
   <section class="view" id="call" hidden>
+    <div class="vaddebug-wrap" id="vadDebugWrap">
+      <button class="history-toggle iconbtn" id="vadDebugBtn" hidden aria-haspopup="true" aria-expanded="false" aria-label="Live tuning" title="Live tuning">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M21 18h-1"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="19" cy="18" r="2"/></svg>
+      </button>
+      <div class="vadpanel" id="vadPanel" hidden>
+        <div class="vadpanel-title">Hands-free tuning <span class="vadpanel-live">live</span></div>
+        <div class="vadrow">
+          <label>Voice sensitivity · <span id="dbg_threshval">0.5</span></label>
+          <input type="range" id="dbg_thresh" class="slider" min="0.1" max="0.9" step="0.05" value="0.5">
+        </div>
+        <div class="vadrow">
+          <label>Pause before it replies · <span id="dbg_silenceval">500 ms</span></label>
+          <input type="range" id="dbg_silence" class="slider" min="150" max="2000" step="50" value="500">
+        </div>
+        <div class="vadrow">
+          <label>Lead-in padding · <span id="dbg_prefixval">300 ms</span></label>
+          <input type="range" id="dbg_prefix" class="slider" min="0" max="800" step="50" value="300">
+        </div>
+        <div class="vadrow">
+          <label>Minimum speech length · <span id="dbg_minspeechval">250 ms</span></label>
+          <input type="range" id="dbg_minspeech" class="slider" min="100" max="1000" step="50" value="250">
+        </div>
+        <div class="vadrow vadrow-switch">
+          <label>Interrupt while it's speaking</label>
+          <button class="switch" id="dbg_bargein" role="switch" aria-checked="true"><span class="knob"></span></button>
+        </div>
+      </div>
+    </div>
     <div class="calltop">
       <div class="callspacer"></div>
       <div class="topbar">
@@ -802,6 +862,9 @@
         <div class="byline">connected</div>
       </div>
       <div class="calltools">
+        <button class="history-toggle iconbtn" id="handsFreeBtn" role="switch" aria-checked="false" aria-label="Hands-free — talk without holding" title="Hands-free — talk without holding">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg>
+        </button>
         <button class="history-toggle iconbtn" id="incognitoBtn" role="switch" aria-checked="false" aria-label="Incognito — don't save this conversation" title="Incognito — don't save this conversation">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13c0-3.3 3.6-6 8-6s8 2.7 8 6v4.5a1.5 1.5 0 0 1-2.4 1.2L15 17.5l-1.8 1.3a2 2 0 0 1-2.4 0L9 17.5l-2.6 1.2A1.5 1.5 0 0 1 4 17.5z"/><circle cx="9.5" cy="12.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="12.5" r="1.1" fill="currentColor" stroke="none"/></svg>
         </button>
@@ -970,6 +1033,50 @@
       </div>
       <div class="teststatus" id="set_asrstatus"></div>
 
+      <h3 class="subhead">Hands-free (experimental)</h3>
+      <p class="hint" style="margin:-.4rem 0 1rem">Talk without holding — it detects when you start and stop speaking. The mic stays open for the whole call while this is on.</p>
+      <div class="switchrow">
+        <div>
+          <div class="switchlabel">Hands-free mode</div>
+          <div class="switchsub">Just start talking; your turn is sent when you pause. You can still hold to talk any time.</div>
+        </div>
+        <button class="switch" id="set_vad_enabled" role="switch" aria-checked="false"><span class="knob"></span></button>
+      </div>
+      <div class="switchrow">
+        <div>
+          <div class="switchlabel">Interrupt while it's speaking</div>
+          <div class="switchsub">Start talking to cut it off mid-reply. Works best with headphones.</div>
+        </div>
+        <button class="switch" id="set_vad_bargein" role="switch" aria-checked="true"><span class="knob"></span></button>
+      </div>
+      <div class="field">
+        <label>Voice sensitivity · <span class="speedval" id="set_vad_threshval">0.5</span></label>
+        <input type="range" id="set_vad_thresh" class="slider" min="0.1" max="0.9" step="0.05" value="0.5">
+        <div class="hint">Lower picks up quieter speech; higher ignores more background noise.</div>
+      </div>
+      <div class="field">
+        <label>Pause before it replies · <span class="speedval" id="set_vad_silenceval">500 ms</span></label>
+        <input type="range" id="set_vad_silence" class="slider" min="150" max="2000" step="50" value="500">
+        <div class="hint">How long a silence ends your turn. Shorter feels snappier; longer lets you think mid-sentence.</div>
+      </div>
+      <div class="field">
+        <label>Lead-in padding · <span class="speedval" id="set_vad_prefixval">300 ms</span></label>
+        <input type="range" id="set_vad_prefix" class="slider" min="0" max="800" step="50" value="300">
+        <div class="hint">Audio kept from just before you started talking, so first words aren't clipped.</div>
+      </div>
+      <div class="field">
+        <label>Minimum speech length · <span class="speedval" id="set_vad_minspeechval">250 ms</span></label>
+        <input type="range" id="set_vad_minspeech" class="slider" min="100" max="1000" step="50" value="250">
+        <div class="hint">Sounds shorter than this are ignored (coughs, bumps, background blips).</div>
+      </div>
+      <div class="switchrow">
+        <div>
+          <div class="switchlabel">Show the in-call tuning panel</div>
+          <div class="switchsub">A small button during calls for adjusting these live while you test.</div>
+        </div>
+        <button class="switch" id="set_debug" role="switch" aria-checked="false"><span class="knob"></span></button>
+      </div>
+
       <button class="savebtn" id="settingsSave">Save settings</button>
     </div>
   </section>
@@ -1086,6 +1193,21 @@ let drawerChatId=null;    // id of the conversation open in the drawer
 let currentSessionId=null;// id of the live session (from the server each turn)
 let drawerPending=null, lastUserText="";
 
+/* hands-free (VAD) state */
+let handsFree=false;        // armed: mic stays open, speech start/stop auto-detected
+let vadBase="";             // http://host:vad_port (from GET /config)
+let vadCfg={ vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:500,
+             vad_prefix_ms:300, vad_min_speech_ms:250 };  // refreshed at call start
+let vadRing=null;           // rolling 16 kHz Float32 buffer of the last ~30 s
+const VAD_RING_LEN=16000*30;
+let ringAbs=0;              // absolute samples captured (ring write head)
+let sentAbs=0;              // absolute samples successfully fed to the detector
+let feedChunks=[], feedLen=0, feedInFlight=false, vadFailures=0;
+let pendingStartMs=null;    // detector ms of the current utterance's start
+let turnAbort=null;         // AbortController of the in-flight /turn/stream
+let playbackEpoch=0;        // bumped by stopPlayback(); stale chunks are dropped
+let hfDecim=null;           // stateful device-rate → 16 kHz decimator
+
 const COPY_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const CHECK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
@@ -1133,7 +1255,8 @@ function setState(s){
   document.body.classList.toggle("state-thinking-dots", s==="thinking");
   if(s==="thinking"){ startThinkClock(); return; }   // clock owns the label while thinking
   stopThinkClock();
-  const idleHint = matchMedia("(pointer:coarse)").matches ? "touch and hold to talk" : "press and hold to talk";
+  const idleHint = handsFree ? "just start talking — I'm listening"
+    : (matchMedia("(pointer:coarse)").matches ? "touch and hold to talk" : "press and hold to talk");
   const labels={ idle:idleHint, listening:"listening…", thinking:"thinking…", speaking:"speaking" };
   statusEl.textContent=labels[s]||"";
 }
@@ -1237,12 +1360,28 @@ async function start(){
   showView("call");
   callStart=Date.now(); timerInt=setInterval(tickTimer,1000); tickTimer();
   setState("idle"); levelLoop();
+  // hands-free: pull the effective VAD settings; auto-arm if enabled
+  try{
+    const s=await (await fetch("/settings")).json();
+    vadCfg={ vad_barge_in: s.vad_barge_in!==false,
+             vad_threshold: parseFloat(s.vad_threshold)||0.5,
+             vad_silence_ms: parseInt(s.vad_silence_ms)||500,
+             vad_prefix_ms: parseInt(s.vad_prefix_ms)||300,
+             vad_min_speech_ms: parseInt(s.vad_min_speech_ms)||250 };
+    vadDebugBtn.hidden=!s.debug_settings;
+    if(s.vad_enabled) armHandsFree(false);   // no persist — it's already saved
+  }catch(_){
+    vadCfg={vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:500,
+            vad_prefix_ms:300, vad_min_speech_ms:250};
+  }
 }
 function tickTimer(){
   const s=Math.floor((Date.now()-callStart)/1000);
   timerEl.textContent=`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
 }
 function end(){
+  disarmHandsFree(false);         // stop feeding + /vad/stop (setting stays as-is)
+  if(turnAbort){ try{ turnAbort.abort(); }catch(_){} }
   stopPlayback();
   releaseMic();
   if(ac) ac.close();
@@ -1444,6 +1583,18 @@ async function loadSettings(){
   $("#set_topp").value=topp; $("#set_toppval").textContent=Number(topp).toFixed(2).replace(/0$/,"");
   $("#set_maxtokens").value=(s.llm_max_tokens!=null?s.llm_max_tokens:0);
   $("#set_numctx").value=(s.llm_num_ctx!=null?s.llm_num_ctx:0);
+  // hands-free (VAD)
+  setSwitch($("#set_vad_enabled"), !!s.vad_enabled);
+  setSwitch($("#set_vad_bargein"), s.vad_barge_in!==false);
+  setSwitch($("#set_debug"), !!s.debug_settings);
+  const vth=(s.vad_threshold!=null?s.vad_threshold:0.5);
+  $("#set_vad_thresh").value=vth; $("#set_vad_threshval").textContent=Number(vth).toFixed(2).replace(/0$/,"");
+  const vsil=(s.vad_silence_ms!=null?s.vad_silence_ms:500);
+  $("#set_vad_silence").value=vsil; $("#set_vad_silenceval").textContent=vsil+" ms";
+  const vpre=(s.vad_prefix_ms!=null?s.vad_prefix_ms:300);
+  $("#set_vad_prefix").value=vpre; $("#set_vad_prefixval").textContent=vpre+" ms";
+  const vmin=(s.vad_min_speech_ms!=null?s.vad_min_speech_ms:250);
+  $("#set_vad_minspeech").value=vmin; $("#set_vad_minspeechval").textContent=vmin+" ms";
   $("#setModel").innerHTML=modelConfigHTML("set");
   wireModelConfig("set"); fillModelConfig("set", s);
   // speech recognition (ASR) picker
@@ -1508,6 +1659,13 @@ async function saveSettings(){
     llm_num_ctx:parseInt($("#set_numctx").value,10)||0,
     asr_model:asr?asr.model:undefined,
     asr_backend:asr?asr.backend:undefined,
+    vad_enabled:$("#set_vad_enabled").getAttribute("aria-checked")==="true",
+    vad_barge_in:$("#set_vad_bargein").getAttribute("aria-checked")==="true",
+    vad_threshold:parseFloat($("#set_vad_thresh").value),
+    vad_silence_ms:parseInt($("#set_vad_silence").value,10),
+    vad_prefix_ms:parseInt($("#set_vad_prefix").value,10),
+    vad_min_speech_ms:parseInt($("#set_vad_minspeech").value,10),
+    debug_settings:$("#set_debug").getAttribute("aria-checked")==="true",
   }, collectModelConfig("set"));
   // did the speech-recognition pick change? if so it may need to (down)load.
   const asrChanged=asr && !(asr.model===_settingsCache.asr_model && asr.backend===_settingsCache.asr_backend);
@@ -1741,7 +1899,11 @@ async function acquireMic(){
   micAnalyser = ac.createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=.75;
   micSource.connect(micAnalyser);
   capNode = ac.createScriptProcessor(4096,1,1);
-  capNode.onaudioprocess = (e)=>{ if(holding) captured.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  capNode.onaudioprocess = (e)=>{
+    const c=new Float32Array(e.inputBuffer.getChannelData(0));
+    if(holding) captured.push(c);
+    if(handsFree && started) hfCapture(c);   // continuous feed to the detector
+  };
   micSource.connect(capNode); capNode.connect(ac.destination); // silent output; keeps the node processing
   return true;
 }
@@ -1757,14 +1919,16 @@ async function beginTalk(){
   if(!started || holding || busy) return;
   stopPlayback();                 // barge-in: cut any current/queued speech
   holding=true; captured=[];
+  pendingStartMs=null;            // PTT takes precedence over any auto-utterance
   const t=++micToken;
   pttBtn.classList.add("active"); pttLabel.textContent="Listening…";
   setState("listening");
   if(ac.state==="suspended") ac.resume();
+  if(micStream) return;           // hands-free already holds the mic open
   const ok=await acquireMic();
   if(!ok){ holding=false; pttBtn.classList.remove("active"); pttLabel.textContent="Hold to talk"; setState("idle"); return; }
   // released mid-acquisition (quick tap) — drop the stream we just opened
-  if(t!==micToken || !holding){ releaseMic(); }
+  if(t!==micToken || !holding){ if(!handsFree) releaseMic(); }
 }
 
 /* ---------- streaming playback (gapless chunk queue) ---------- */
@@ -1777,12 +1941,15 @@ function ensureStreamAnalyser(){
   playAnalyser=streamAnalyser;
 }
 function stopPlayback(){
+  playbackEpoch++;   // invalidate chunks still decoding — they must not schedule
   activeSources.forEach(s=>{ try{s.stop();}catch(_){} });
   activeSources=[]; nextStartTime=0; streamDone=false;
 }
 async function enqueueChunk(b64){
+  const ep=playbackEpoch;
   const bytes=Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
   let buf; try{ buf=await ac.decodeAudioData(bytes.buffer); }catch(_){ return; }
+  if(ep!==playbackEpoch) return;   // barge-in happened while this chunk decoded
   ensureStreamAnalyser();
   const src=ac.createBufferSource(); src.buffer=buf; src.connect(streamAnalyser);
   const startAt=Math.max(ac.currentTime+0.04, nextStartTime);
@@ -1886,16 +2053,23 @@ async function endTalk(){
   if(!holding) return;
   holding=false; micToken++;
   const rate = (ac && ac.sampleRate) || 48000;
-  releaseMic();                   // stop the device now → OS mic indicator turns off
+  if(!handsFree) releaseMic();    // hands-free keeps the device open between turns
   pttBtn.classList.remove("active"); pttLabel.textContent="Hold to talk";
   const wav = encodeWAV(flatten(captured), rate, 16000);
   captured=[];
   if(wav.byteLength < 4000){ setState("idle"); return; } // too short
+  await sendUtterance(wav);
+}
+
+/* Shared turn sender: PTT and hands-free both funnel a 16 kHz WAV through here.
+   Abortable — hands-free barge-in cancels the in-flight turn via turnAbort. */
+async function sendUtterance(wav){
   busy=true; pttBtn.disabled=true; setState("thinking");
   stopPlayback();
+  const ab=new AbortController(); turnAbort=ab;
   let gotAudio=false;
   try{
-    const r=await fetch("/turn/stream"+(incognito?"?private=1":""),{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:wav});
+    const r=await fetch("/turn/stream"+(incognito?"?private=1":""),{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:wav,signal:ab.signal});
     const reader=r.body.getReader(); const dec=new TextDecoder(); let sbuf="";
     while(true){
       const {done,value}=await reader.read();
@@ -1922,13 +2096,20 @@ async function endTalk(){
           if(!call.classList.contains("history-collapsed") && !drawerInChat) loadPastChatsDrawer();
         }
         else if(msg.type==="error"){ if(drawerPending) drawerResolve("…"); if(!gotAudio){ setState("idle"); } }
+        // "tick" (server heartbeat) and any future types fall through harmlessly
       }
     }
-  }catch(e){ if(!gotAudio){ setState("idle"); } }
+  }catch(e){
+    if(ab.signal.aborted){ if(drawerPending) drawerResolve("…"); }   // barge-in: keep the new "listening" state
+    else if(!gotAudio){ setState("idle"); }
+  }
   finally{
     busy=false; pttBtn.disabled=false;
-    streamDone=true;
-    if(activeSources.length===0 && state!=="listening") setState("idle");
+    if(turnAbort===ab) turnAbort=null;
+    if(!ab.signal.aborted){
+      streamDone=true;
+      if(activeSources.length===0 && state!=="listening") setState("idle");
+    }
   }
 }
 
@@ -1990,11 +2171,183 @@ function encodeWAV(samples, inRate, outRate){
   return buf;
 }
 
+/* ---------- hands-free (VAD) ---------- */
+/* Stateful device-rate → 16 kHz decimator. Unlike downsample(), it carries the
+   fractional read position across chunks, so on 44.1 kHz devices no samples are
+   dropped at chunk boundaries — the detector's ms clock and the ring buffer stay
+   exactly aligned for the whole call (event ms × 16 == absolute ring index). */
+function makeDecimator(inRate, outRate){
+  const ratio=inRate/outRate;
+  let carry=new Float32Array(0), pos=0;
+  return function(chunk){
+    const data=new Float32Array(carry.length+chunk.length);
+    data.set(carry,0); data.set(chunk,carry.length);
+    const out=[];
+    let p=pos;
+    while(p+ratio<=data.length){
+      const a=Math.floor(p), b=Math.min(data.length, Math.floor(p+ratio));
+      let s=0; for(let j=a;j<b;j++) s+=data[j];
+      out.push(b>a ? s/(b-a) : 0);
+      p+=ratio;
+    }
+    const consumed=Math.floor(p);
+    carry=data.slice(consumed); pos=p-consumed;
+    return Float32Array.from(out);
+  };
+}
+
+function hfCapture(chunk){
+  if(!hfDecim || !vadRing) return;
+  const ds=hfDecim(chunk);
+  if(!ds.length) return;
+  for(let i=0;i<ds.length;i++){ vadRing[ringAbs%VAD_RING_LEN]=ds[i]; ringAbs++; }
+  feedChunks.push(ds); feedLen+=ds.length;
+  if(feedLen>=3200) hfPump();          // ~200 ms batches
+}
+
+async function hfPump(){
+  if(feedInFlight || !feedLen || !handsFree) return;
+  feedInFlight=true;
+  const batch=flatten(feedChunks); feedChunks=[]; feedLen=0;
+  const pcm=new Int16Array(batch.length);
+  for(let i=0;i<batch.length;i++){ const s=Math.max(-1,Math.min(1,batch[i])); pcm[i]=s<0?s*0x8000:s*0x7fff; }
+  try{
+    const r=await fetch(vadBase+"/vad/feed",{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:pcm.buffer});
+    const j=await r.json();
+    if(j.ok){
+      vadFailures=0; sentAbs+=batch.length;
+      handleVadEvents(j.events||[]);
+    }else if(j.retry){
+      // server skipped the chunk (its clock didn't advance) — re-queue so the
+      // fed stream stays identical to the captured stream
+      feedChunks.unshift(batch); feedLen+=batch.length;
+    }else{
+      throw new Error(j.error||"vad");
+    }
+  }catch(e){
+    if(!handsFree) return;             // disarmed mid-flight — drop silently
+    feedChunks.unshift(batch); feedLen+=batch.length;
+    vadFailures++;
+    if(vadFailures===3){
+      const ok=await vadStartSession();     // one re-arm attempt (server restart)
+      if(!ok) autoDisarm();
+    }else if(vadFailures>3){ autoDisarm(); }
+  }finally{
+    feedInFlight=false;
+    if(handsFree && feedLen>=3200) hfPump();
+    if(feedLen>16000*10){ autoDisarm(); }   // 10 s backlog — something is wrong
+  }
+}
+
+function handleVadEvents(events){
+  for(const e of events){
+    if(e.kind==="speech_started"){
+      if(holding){ pendingStartMs=null; continue; }   // PTT takes precedence
+      const talking = busy || state==="speaking" || activeSources.length>0;
+      if(talking){
+        if(!vadCfg || !vadCfg.vad_barge_in){ pendingStartMs=null; continue; }
+        stopPlayback();                                // barge-in: cut it off
+        if(turnAbort){ try{ turnAbort.abort(); }catch(_){} }
+      }
+      pendingStartMs=e.ms;
+      setState("listening");
+    }else if(e.kind==="speech_stopped"){
+      if(pendingStartMs===null) continue;              // start was suppressed
+      const startMs=pendingStartMs; pendingStartMs=null;
+      const sil=(vadCfg&&vadCfg.vad_silence_ms)||500;
+      const prefix=(vadCfg&&vadCfg.vad_prefix_ms)||300;
+      // start already has the prefix subtracted, so true speech excludes it
+      const speechMs=(e.ms-sil)-(startMs+prefix);
+      if(speechMs < ((vadCfg&&vadCfg.vad_min_speech_ms)||250)){
+        if(!busy && activeSources.length===0 && state==="listening") setState("idle");
+        continue;                                      // blip — ignore
+      }
+      const endMs=e.ms-sil+120;                        // trim the silence tail
+      const s0=Math.max(startMs*16, ringAbs-VAD_RING_LEN, 0);
+      const s1=Math.min(endMs*16, ringAbs);
+      if(s1<=s0) continue;
+      const slice=new Float32Array(s1-s0);
+      for(let i=s0;i<s1;i++) slice[i-s0]=vadRing[i%VAD_RING_LEN];
+      sendUtterance(encodeWAV(slice,16000,16000));
+    }
+  }
+}
+
+async function vadStartSession(){
+  try{
+    const r=await fetch(vadBase+"/vad/start",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({threshold:vadCfg.vad_threshold, prefix_padding_ms:vadCfg.vad_prefix_ms,
+                           silence_duration_ms:vadCfg.vad_silence_ms})});
+    const j=await r.json();
+    if(!j.ok) return false;
+    // fresh detector = fresh clock: reset everything that maps ms ↔ samples
+    vadRing=new Float32Array(VAD_RING_LEN); ringAbs=0; sentAbs=0;
+    feedChunks=[]; feedLen=0; pendingStartMs=null;
+    hfDecim=makeDecimator((ac&&ac.sampleRate)||48000, 16000);
+    return true;
+  }catch(_){ return false; }
+}
+
+async function armHandsFree(persist){
+  if(handsFree || !started) return;
+  ensureAudio();
+  handsFreeBtn.disabled=true;
+  statusEl.textContent="hands-free: warming up…";
+  if(!vadBase){
+    try{ const c=await (await fetch("/config")).json();
+         vadBase=`http://${location.hostname}:${c.vad_port||8766}`; }catch(_){}
+  }
+  if(!micStream){
+    const ok=await acquireMic();
+    if(!ok){ handsFreeBtn.disabled=false; setState("idle"); return; }
+  }
+  const ok=await vadStartSession();
+  handsFreeBtn.disabled=false;
+  if(!ok){
+    statusEl.textContent="hands-free unavailable — hold to talk";
+    if(!holding) releaseMic();
+    return;
+  }
+  handsFree=true; vadFailures=0;
+  handsFreeBtn.setAttribute("aria-checked","true");
+  setState(state);   // refresh the idle hint
+  if(persist) persistSettings({vad_enabled:true});
+}
+
+function disarmHandsFree(persist){
+  if(!handsFree) return;
+  handsFree=false;
+  handsFreeBtn.setAttribute("aria-checked","false");
+  if(vadBase) fetch(vadBase+"/vad/stop",{method:"POST"}).catch(()=>{});
+  pendingStartMs=null; feedChunks=[]; feedLen=0;
+  if(!holding) releaseMic();   // OS mic light turns off again
+  if(persist) persistSettings({vad_enabled:false});
+  setState(state==="listening" ? "idle" : state);
+}
+
+function autoDisarm(){
+  disarmHandsFree(false);
+  statusEl.textContent="hands-free unavailable — hold to talk";
+}
+
+/* Persist a partial settings change without saveSettings() — that reloads the
+   page (fine from the Settings screen, fatal mid-call). */
+function persistSettings(partial){
+  fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+                     body:JSON.stringify(partial)}).catch(()=>{});
+}
+
 /* ---------- events ---------- */
 $("#beginBtn").addEventListener("click", start);
 endBtn.addEventListener("click", end);
 historyToggle.addEventListener("click",()=>setHistoryCollapsed(!call.classList.contains("history-collapsed")));
 historyClose.addEventListener("click",()=>setHistoryCollapsed(true));
+// hands-free: talk without holding — Silero VAD detects start/stop of speech
+const handsFreeBtn=$("#handsFreeBtn");
+handsFreeBtn.addEventListener("click",()=>{
+  if(handsFree) disarmHandsFree(true);
+  else armHandsFree(true);
+});
 // incognito: this conversation isn't saved or remembered (existing memory is still used)
 const incognitoBtn=$("#incognitoBtn"), bylineEl=document.querySelector("#call .byline");
 incognitoBtn.addEventListener("click",()=>{
@@ -2118,6 +2471,84 @@ function setCallMenu(open){ callMenu.hidden=!open; callMenuBtn.setAttribute("ari
 callMenuBtn.addEventListener("click",(e)=>{ e.stopPropagation(); setCallMenu(callMenu.hidden); });
 callMenu.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>setCallMenu(false)));
 document.addEventListener("click",(e)=>{ if(!callMenu.hidden && !e.target.closest(".callmenu-wrap")) setCallMenu(false); });
+
+/* ---------- in-call hands-free tuning panel (debug settings) ---------- */
+const vadDebugBtn=$("#vadDebugBtn"), vadPanel=$("#vadPanel");
+function setVadPanel(open){
+  vadPanel.hidden=!open;
+  vadDebugBtn.setAttribute("aria-expanded", open?"true":"false");
+  if(open) syncVadPanel();
+}
+function syncVadPanel(){
+  if(!vadCfg) return;
+  $("#dbg_thresh").value=vadCfg.vad_threshold;
+  $("#dbg_threshval").textContent=Number(vadCfg.vad_threshold).toFixed(2).replace(/0$/,"");
+  $("#dbg_silence").value=vadCfg.vad_silence_ms;
+  $("#dbg_silenceval").textContent=vadCfg.vad_silence_ms+" ms";
+  $("#dbg_prefix").value=vadCfg.vad_prefix_ms;
+  $("#dbg_prefixval").textContent=vadCfg.vad_prefix_ms+" ms";
+  $("#dbg_minspeech").value=vadCfg.vad_min_speech_ms;
+  $("#dbg_minspeechval").textContent=vadCfg.vad_min_speech_ms+" ms";
+  setSwitch($("#dbg_bargein"), !!vadCfg.vad_barge_in);
+}
+vadDebugBtn.addEventListener("click",(e)=>{ e.stopPropagation(); setVadPanel(vadPanel.hidden); });
+document.addEventListener("click",(e)=>{ if(!vadPanel.hidden && !e.target.closest(".vaddebug-wrap")) setVadPanel(false); });
+
+// live-apply (throttled) to the running detector + persist (debounced) to settings
+let _vadCfgT=null, _vadPersistT=null;
+function vadLiveApply(){
+  if(_vadCfgT) return;
+  _vadCfgT=setTimeout(async ()=>{
+    _vadCfgT=null;
+    if(!handsFree || !vadBase) return;
+    try{
+      const r=await fetch(vadBase+"/vad/config",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({threshold:vadCfg.vad_threshold, prefix_padding_ms:vadCfg.vad_prefix_ms,
+                             silence_duration_ms:vadCfg.vad_silence_ms})});
+      const j=await r.json();
+      if(j.ok && j.clock_preserved===false){
+        // detector was rebuilt (clock reset) — realign our sample counters
+        vadRing=new Float32Array(VAD_RING_LEN); ringAbs=0; sentAbs=0;
+        feedChunks=[]; feedLen=0; pendingStartMs=null;
+        hfDecim=makeDecimator((ac&&ac.sampleRate)||48000, 16000);
+      }
+    }catch(_){}
+  }, 150);
+}
+function vadPersist(){
+  clearTimeout(_vadPersistT);
+  _vadPersistT=setTimeout(()=>{
+    persistSettings({vad_threshold:vadCfg.vad_threshold, vad_silence_ms:vadCfg.vad_silence_ms,
+                     vad_prefix_ms:vadCfg.vad_prefix_ms, vad_min_speech_ms:vadCfg.vad_min_speech_ms,
+                     vad_barge_in:vadCfg.vad_barge_in});
+  }, 800);
+}
+$("#dbg_thresh").addEventListener("input",(e)=>{
+  vadCfg.vad_threshold=parseFloat(e.target.value);
+  $("#dbg_threshval").textContent=Number(e.target.value).toFixed(2).replace(/0$/,"");
+  vadLiveApply(); vadPersist();
+});
+$("#dbg_silence").addEventListener("input",(e)=>{
+  vadCfg.vad_silence_ms=parseInt(e.target.value,10);
+  $("#dbg_silenceval").textContent=e.target.value+" ms";
+  vadLiveApply(); vadPersist();
+});
+$("#dbg_prefix").addEventListener("input",(e)=>{
+  vadCfg.vad_prefix_ms=parseInt(e.target.value,10);
+  $("#dbg_prefixval").textContent=e.target.value+" ms";
+  vadLiveApply(); vadPersist();
+});
+$("#dbg_minspeech").addEventListener("input",(e)=>{
+  vadCfg.vad_min_speech_ms=parseInt(e.target.value,10);   // client-side guard only
+  $("#dbg_minspeechval").textContent=e.target.value+" ms";
+  vadPersist();
+});
+$("#dbg_bargein").addEventListener("click",(e)=>{
+  const on=e.currentTarget.getAttribute("aria-checked")==="true";
+  setSwitch(e.currentTarget, !on);
+  vadCfg.vad_barge_in=!on;   // client-side behavior — no detector change needed
+  vadPersist();
+});
 $("#profileSave").addEventListener("click", saveProfile);
 $("#settingsSave").addEventListener("click", saveSettings);
 $("#modelsetupSave").addEventListener("click", saveModelSetup);
@@ -2140,6 +2571,17 @@ $("#set_trim").addEventListener("click",(e)=>{
   setSwitch(e.currentTarget, !on);
 });
 $("#set_preview").addEventListener("click", previewVoice);
+// hands-free settings: live value labels + toggles
+$("#set_vad_thresh").addEventListener("input",(e)=>{ $("#set_vad_threshval").textContent=Number(e.target.value).toFixed(2).replace(/0$/,""); });
+$("#set_vad_silence").addEventListener("input",(e)=>{ $("#set_vad_silenceval").textContent=e.target.value+" ms"; });
+$("#set_vad_prefix").addEventListener("input",(e)=>{ $("#set_vad_prefixval").textContent=e.target.value+" ms"; });
+$("#set_vad_minspeech").addEventListener("input",(e)=>{ $("#set_vad_minspeechval").textContent=e.target.value+" ms"; });
+["set_vad_enabled","set_vad_bargein","set_debug"].forEach(id=>{
+  $("#"+id).addEventListener("click",(e)=>{
+    const on=e.currentTarget.getAttribute("aria-checked")==="true";
+    setSwitch(e.currentTarget, !on);
+  });
+});
 
 // first run: if no profile yet, walk through onboarding (profile → model)
 (async function init(){

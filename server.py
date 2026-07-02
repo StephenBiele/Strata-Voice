@@ -36,6 +36,10 @@ import voicechat as vc  # reuse llm_reply / apply_directives / list_memories
 
 HOST = os.environ.get("VOICE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VOICE_PORT", "8765"))
+# Hands-free VAD rides its own port + thread: the main server is single-threaded
+# and holds _lock for a whole streaming turn, but barge-in detection must keep
+# running exactly then. The page (served from :PORT) calls this cross-origin.
+VAD_PORT = int(os.environ.get("VOICE_VAD_PORT", "8766"))
 ASSISTANT_NAME = os.environ.get("VOICE_NAME", "Sage")
 HERE = Path(__file__).parent
 
@@ -75,6 +79,14 @@ DEFAULT_SETTINGS = {
     # Speech recognition (what turns your voice into text)
     "asr_model": vc.ASR_MODEL,           # HF model id
     "asr_backend": vc.ASR_BACKEND,       # 'mlx-audio' | 'parakeet-mlx'
+    # Hands-free (VAD): talk without holding; it detects speech start/stop
+    "vad_enabled": False,                # hands-free mode armed on call start
+    "vad_barge_in": True,                # speaking while it talks interrupts it
+    "vad_threshold": 0.5,                # voice sensitivity (higher = stricter)
+    "vad_silence_ms": 500,               # pause length that ends your turn
+    "vad_prefix_ms": 300,                # lead-in audio kept before speech began
+    "vad_min_speech_ms": 250,            # ignore blips shorter than this
+    "debug_settings": False,             # show the in-call tuning panel
 }
 # What a POST /settings is allowed to write (api_key handled separately).
 SETTINGS_FIELDS = (
@@ -84,6 +96,8 @@ SETTINGS_FIELDS = (
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
     "asr_model", "asr_backend",
+    "vad_enabled", "vad_barge_in", "vad_threshold", "vad_silence_ms",
+    "vad_prefix_ms", "vad_min_speech_ms", "debug_settings",
 )
 
 # Speech-recognition model catalog. Each entry is a (model id + loader backend)
@@ -111,8 +125,9 @@ ASR_MODELS = [
      "blurb": "Newest multilingual. Very good speed & accuracy (experimental)."},
 ]
 # Numeric settings and their coercion (so JSON strings from the UI store cleanly).
-_FLOAT_FIELDS = {"tts_speed", "llm_temperature", "llm_top_p"}
-_INT_FIELDS = {"tts_gap_ms", "llm_max_tokens", "llm_num_ctx"}
+_FLOAT_FIELDS = {"tts_speed", "llm_temperature", "llm_top_p", "vad_threshold"}
+_INT_FIELDS = {"tts_gap_ms", "llm_max_tokens", "llm_num_ctx",
+               "vad_silence_ms", "vad_prefix_ms", "vad_min_speech_ms"}
 
 # English Kokoro voices (American 'a' / British 'b'). The first letter is also
 # Kokoro's lang_code, so voice[0] routes pronunciation. Non-English packs are
@@ -187,7 +202,8 @@ def _save_settings(partial: dict) -> dict:
     for k in SETTINGS_FIELDS:
         if k in partial:
             v = partial[k]
-            if k in ("thinking", "configured"):
+            if k in ("thinking", "configured", "vad_enabled", "vad_barge_in",
+                     "debug_settings"):
                 v = bool(v)
             elif k in _FLOAT_FIELDS:
                 try: v = float(v)
@@ -410,6 +426,141 @@ def _memory_worker() -> None:
             print("[memory] extraction error:", e)
         finally:
             _mem_jobs.task_done()
+
+
+# ---- hands-free VAD micro-server (:VAD_PORT) ----------------------------------
+# Lives on its own port + thread so speech detection keeps working while the
+# main (single-threaded) server is busy streaming a turn — which is exactly when
+# barge-in matters. The Silero model is lazy-loaded inside the serving thread
+# (same MLX thread philosophy as the main models) and never touches _lock.
+# State is owned exclusively by the VAD thread: the browser sends one chunk at a
+# time and waits for the response, so there is no concurrent access by design.
+_vad_model = None
+_vad_sv = None       # current StreamingVad session (None = not armed)
+
+
+def _vad_clamp(body: dict):
+    """Build a clamped ServerVadConfig from a client config dict."""
+    from mlx_audio.realtime_vad import ServerVadConfig
+    def f(key, default, lo, hi, cast):
+        try:
+            return min(hi, max(lo, cast(body.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+    return ServerVadConfig(
+        threshold=f("threshold", 0.5, 0.05, 0.95, float),
+        prefix_padding_ms=f("prefix_padding_ms", 300, 0, 1000, int),
+        silence_duration_ms=f("silence_duration_ms", 500, 150, 3000, int),
+    )
+
+
+class VadHandler(BaseHTTPRequestHandler):
+    # HTTP/1.0 = no keep-alive, on purpose: this server is single-threaded, and a
+    # browser holding one idle keep-alive connection would block every request
+    # arriving on a second pooled connection (observed as multi-second stalls).
+    # Localhost connection setup is ~free at 5 req/s, so close after every reply.
+    protocol_version = "HTTP/1.0"
+
+    def log_message(self, *a):  # quiet
+        pass
+
+    def _cors(self):
+        # The page origin is :PORT, this server is :VAD_PORT — cross-origin.
+        # Local-only (binds 127.0.0.1), no secrets, so a wildcard is fine.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def _json(self, code: int, obj) -> None:
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self._cors()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _body(self) -> bytes:
+        n = int(self.headers.get("Content-Length", "0"))
+        return self.rfile.read(n) if n else b""
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors()
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_POST(self):
+        global _vad_model, _vad_sv
+        u = urlparse(self.path)
+        try:
+            if u.path == "/vad/start":
+                body = json.loads(self._body() or b"{}")
+                from mlx_audio.realtime_vad import StreamingVad
+                if _vad_model is None:
+                    from mlx_audio.vad import load_model
+                    _vad_model = load_model("mlx-community/silero-vad")
+                    print("[vad] silero-vad loaded")
+                cfg = _vad_clamp(body)
+                # a fresh session always replaces the old one, so a page reload
+                # can never leave a stale detector behind
+                _vad_sv = StreamingVad(_vad_model, cfg)
+                return self._json(200, {"ok": True, "config": cfg.to_dict(),
+                                        "frame_ms": 32})
+            if u.path == "/vad/feed":
+                data = self._body()
+                if _vad_sv is None:
+                    return self._json(200, {"ok": False, "error": "no session"})
+                if len(data) % 2:
+                    data = data[:-1]
+                samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+                try:
+                    events = _vad_sv.process(samples)
+                except Exception as e:
+                    # MLX hiccup (e.g. GPU contention) — chunk is skipped, the
+                    # detector's clock only advances on processed audio, so the
+                    # client should just keep feeding.
+                    print(f"[vad] process failed: {e}")
+                    return self._json(200, {"ok": False, "retry": True})
+                return self._json(200, {
+                    "ok": True,
+                    "events": [{"kind": e.kind.value, "ms": e.audio_ms} for e in events],
+                    "in_speech": _vad_sv.in_speech,
+                })
+            if u.path == "/vad/config":
+                body = json.loads(self._body() or b"{}")
+                if _vad_sv is None:
+                    return self._json(200, {"ok": False, "error": "no session"})
+                cfg = _vad_clamp(body)
+                try:
+                    # live retune preserving the audio clock: transplant the
+                    # detector's counters into a fresh one with the new config
+                    from mlx_audio.realtime_vad import TurnDetector
+                    old = _vad_sv._detector
+                    nd = TurnDetector(cfg)
+                    nd._elapsed_ms = old._elapsed_ms
+                    nd._in_speech = old._in_speech
+                    nd._silence_ms = old._silence_ms
+                    _vad_sv._detector = nd
+                    _vad_sv._config = cfg
+                    return self._json(200, {"ok": True, "clock_preserved": True,
+                                            "config": cfg.to_dict()})
+                except AttributeError:
+                    # library internals changed — rebuild; client resets counters
+                    from mlx_audio.realtime_vad import StreamingVad
+                    _vad_sv = StreamingVad(_vad_model, cfg)
+                    return self._json(200, {"ok": True, "clock_preserved": False,
+                                            "config": cfg.to_dict()})
+            if u.path == "/vad/stop":
+                _vad_sv = None
+                return self._json(200, {"ok": True})
+            return self._json(404, {"error": "unknown endpoint"})
+        except Exception as e:
+            try:
+                self._json(500, {"ok": False, "error": str(e)})
+            except Exception:
+                pass
 
 
 # ---- speech synthesis --------------------------------------------------------
@@ -758,6 +909,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
     reasoned = False   # have we told the client the model is reasoning (thinking, no output yet)?
+    last_write = time.monotonic()   # heartbeat clock (see tick below)
 
     def _emit(seg: str):
         nonlocal seq
@@ -773,6 +925,15 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         for tok in vc.llm_stream(messages, _llm_cfg()):
             full += tok
             clean = _spoken_region(full)   # strips [MEM_*] directives + <think>
+            # heartbeat: a no-op line at most every 0.5s. Its real job is to
+            # bound how long an abandoned turn survives — the single-threaded
+            # server only notices a client abort when a write fails, and long
+            # think-phases can otherwise go seconds without writing (hands-free
+            # barge-in aborts the turn fetch and needs this slot freed fast).
+            now = time.monotonic()
+            if now - last_write > 0.5:
+                last_write = now
+                yield {"type": "tick"}
             # tokens are arriving but nothing speakable yet -> the model is
             # reasoning (inside <think>); tell the client once so it can show
             # "reasoning…" instead of looking frozen.
@@ -945,7 +1106,8 @@ class Handler(BaseHTTPRequestHandler):
             html = html.replace("{{ASSISTANT_NAME}}", _settings()["assistant_name"])
             return self._send(200, html, "text/html; charset=utf-8")
         if u.path == "/config":
-            return self._json(200, {"name": _settings()["assistant_name"]})
+            return self._json(200, {"name": _settings()["assistant_name"],
+                                    "vad_port": VAD_PORT})
         if u.path == "/settings":
             s = _settings()
             out = {k: s[k] for k in SETTINGS_FIELDS}
@@ -1222,9 +1384,14 @@ def main() -> int:
     threading.Thread(target=_backfill_recaps, name="recap-backfill", daemon=True).start()
     # Drain background fact-extraction jobs so that LLM call never stalls a turn.
     threading.Thread(target=_memory_worker, name="memory-worker", daemon=True).start()
+    # Hands-free VAD channel: constructed here so a port conflict fails fast,
+    # served on its own thread (Silero lazy-loads inside that thread on first use).
+    vad_srv = HTTPServer((HOST, VAD_PORT), VadHandler)
+    threading.Thread(target=vad_srv.serve_forever, name="vad-server", daemon=True).start()
     srv = HTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
     print(f"\n  ✦ {ASSISTANT_NAME} is listening at {url}")
+    print(f"    · hands-free VAD on :{VAD_PORT}")
     print("    Open it in your browser, click Start, then hold the orb (or button) to talk.\n")
     try:
         srv.serve_forever()
