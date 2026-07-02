@@ -42,7 +42,7 @@ Homebrew if missing), builds the Python environment, and asks which tier you wan
 
 | Tier | Downloads | Fits | Chat + memory model |
 | :--- | :--- | :--- | :--- |
-| **Lightweight** | ~7 GB | 16 GB Macs | `qwen3.5:9b` |
+| **Lightweight** | ~10 GB | 16 GB Macs | `gemma4:e4b` (fastest) |
 | **Recommended** | ~24 GB | 32 GB+ Macs | `qwen3.6:latest` (36B) |
 
 Then:
@@ -212,7 +212,7 @@ removed without a yes.
 ```sh
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt   # strata-memory pins from GitHub
-ollama pull qwen3.5:9b && ollama pull nomic-embed-text
+ollama pull gemma4:e4b && ollama pull nomic-embed-text
 ollama serve                                 # if not already running
 .venv/bin/python server.py
 ```

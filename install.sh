@@ -18,8 +18,8 @@ die()  { printf "\n  ✗ %s\n" "$1"; [ -n "${2:-}" ] && printf "    → %s\n" "$
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
-LIGHT_CHAT="qwen3.5:9b"
-LIGHT_MEM=""   # same as chat
+LIGHT_CHAT="gemma4:e4b"   # Gemma E4B: selective-activation (~4B active), fastest
+LIGHT_MEM=""              # same as chat — one small model does both on 16 GB Macs
 REC_CHAT="qwen3.6:latest"
 REC_MEM=""   # same as chat: models load one at a time, so a second
              # model would evict the chat model on every background memory job
@@ -99,7 +99,7 @@ TIER="${1:-}"
 if [ "$TIER" != "--light" ] && [ "$TIER" != "--recommended" ]; then
   echo
   printf "%sWhich install?%s\n" "$BOLD" "$RESET"
-  echo   "  [1] Lightweight  (~7 GB)   runs on 16 GB Macs; good replies, fastest"
+  echo   "  [1] Lightweight  (~10 GB)  runs on 16 GB Macs; fastest replies"
   echo   "  [2] Recommended  (~24 GB)  best replies (36B brain); needs a 32 GB+ Mac"
   printf "  choice [2]: "
   read -r CHOICE || CHOICE=""

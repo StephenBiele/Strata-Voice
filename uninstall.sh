@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
 MODELS=(
-  "qwen3.5:9b"
+  "gemma4:e4b"
   "qwen3.6:latest"
   "nomic-embed-text"
 )
