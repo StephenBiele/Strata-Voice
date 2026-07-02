@@ -96,10 +96,15 @@ cd Strata-Voice
 The installer checks and installs the prerequisites (Python 3.12, ffmpeg, Ollama —
 via Homebrew), sets up the Python environment, and asks which tier you want:
 
-| Tier | Downloads | Fits | Chat model | Memory model |
-| :--- | :--- | :--- | :--- | :--- |
-| **Lightweight** | ~7 GB | 16 GB Macs | `qwen3.5:9b` | same as chat |
-| **Recommended** | ~41 GB | 36 GB+ Macs | Qwen3.6-27B-MTP | `qwen3.6:latest` |
+| Tier | Downloads | Fits | Chat + memory model |
+| :--- | :--- | :--- | :--- |
+| **Lightweight** | ~7 GB | 16 GB Macs | `qwen3.5:9b` |
+| **Recommended** | ~24 GB | 32 GB+ Macs | `qwen3.6:latest` (36B) |
+
+One model does both chat and memory: Ollama loads models one at a time, so a separate
+memory model would evict the chat model on every background memory job (~8 s of reload
+each way, measured). The Settings "Memory model" picker still exists for machines with
+enough RAM to hold two models at once.
 
 Both tiers use Parakeet V3 (0.6B) for speech-to-text, Kokoro for the voice, and
 `nomic-embed-text` for semantic recall. Non-interactive installs:

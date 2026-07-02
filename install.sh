@@ -20,8 +20,9 @@ cd "$HERE"
 
 LIGHT_CHAT="qwen3.5:9b"
 LIGHT_MEM=""   # same as chat
-REC_CHAT="MobiusDevelopment/Qwen3.6-27B-MTP-Q4_K_M_GGUF-unsloth:latest"
-REC_MEM="qwen3.6:latest"
+REC_CHAT="qwen3.6:latest"
+REC_MEM=""   # same as chat: models load one at a time, so a second
+             # model would evict the chat model on every background memory job
 EMBED_MODEL="nomic-embed-text"
 
 echo
@@ -99,7 +100,7 @@ if [ "$TIER" != "--light" ] && [ "$TIER" != "--recommended" ]; then
   echo
   printf "%sWhich install?%s\n" "$BOLD" "$RESET"
   echo   "  [1] Lightweight  (~7 GB)   runs on 16 GB Macs; good replies, fastest"
-  echo   "  [2] Recommended  (~41 GB)  best replies (27B brain + dedicated memory model); needs 36 GB+ RAM"
+  echo   "  [2] Recommended  (~24 GB)  best replies (36B brain); needs a 32 GB+ Mac"
   printf "  choice [2]: "
   read -r CHOICE || CHOICE=""
   [ "$CHOICE" = "1" ] && TIER="--light" || TIER="--recommended"

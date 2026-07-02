@@ -8,7 +8,6 @@ cd "$HERE"
 MODELS=(
   "qwen3.5:9b"
   "qwen3.6:latest"
-  "MobiusDevelopment/Qwen3.6-27B-MTP-Q4_K_M_GGUF-unsloth:latest"
   "nomic-embed-text"
 )
 

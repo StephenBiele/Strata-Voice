@@ -1053,7 +1053,7 @@
       </div>
       <div class="field"><label>Memory model</label>
         <select id="set_memmodel" class="select"><option value="">Same as chat model</option></select>
-        <div class="hint">Which model writes memories (saving facts, recaps) in the background. A bigger model makes more accurate memories — and since it never runs during a reply, it doesn't slow the conversation.</div>
+        <div class="hint">Which model writes memories (saving facts, recaps) in the background. Only worth changing if your Mac has enough memory to hold two models at once — otherwise each background job swaps models in and out (~8 s each way) and your next reply pays the reload.</div>
       </div>
 
       <h3 class="subhead">Speech recognition</h3>
