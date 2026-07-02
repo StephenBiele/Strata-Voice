@@ -373,6 +373,27 @@
   }
   .memflash.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 
+  /* background-work pill (memory extraction / conversation wrap-up) */
+  .bgpill{
+    position:fixed; right:.9rem; bottom:calc(.9rem + env(safe-area-inset-bottom)); z-index:50;
+    display:inline-flex; align-items:center; gap:.45rem;
+    font-size:.76rem; font-weight:600; color:var(--ink-soft); letter-spacing:.02em;
+    padding:.4rem .75rem; border-radius:999px; border:1px solid var(--line);
+    background:oklch(0.99 0.01 120 / .92);
+    box-shadow:0 10px 24px -18px oklch(0.4 0.05 130 / .8);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    pointer-events:auto; cursor:default;
+    animation:bgpill-in .3s var(--ease);
+  }
+  .bgpill[hidden]{ display:none; }
+  .bgdot{
+    width:.5rem; height:.5rem; border-radius:50%; background:var(--sage-deep);
+    animation:bgdot-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes bgdot-pulse{ 0%,100%{ opacity:.35; transform:scale(.85); } 50%{ opacity:1; transform:scale(1); } }
+  @keyframes bgpill-in{ from{ opacity:0; transform:translateY(6px); } to{ opacity:1; transform:none; } }
+  @media (prefers-reduced-motion: reduce){ .bgdot{ animation:none; } .bgpill{ animation:none; } }
+
   .chatdrawer{
     position:absolute; top:0; right:0; bottom:0; width:clamp(300px, 22vw, 360px); z-index:4;
     display:flex; flex-direction:column;
@@ -1173,6 +1194,12 @@
     </div>
   </section>
 
+</div>
+
+<!-- background-work pill: shown while memory/recap jobs run after turns or calls -->
+<div class="bgpill" id="bgPill" hidden
+     title="Background memory work is running — brand-new facts and the last conversation's recap may not be recallable until it finishes.">
+  <span class="bgdot" aria-hidden="true"></span><span id="bgPillText">updating memory…</span>
 </div>
 
 <script>
@@ -2618,6 +2645,32 @@ $("#set_vad_minspeech").addEventListener("input",(e)=>{ $("#set_vad_minspeechval
   try{ d=await (await fetch("/profile")).json(); }catch(_){}
   if(!d.onboarded){ showView("profile"); loadProfile(true); }
 })();
+
+// background-work pill: poll /status so memory extraction and end-of-call
+// wrap-up (recap + fact harvest) are visible instead of silently running —
+// and so it's clear why a brand-new fact might not be recallable yet.
+const bgPill=$("#bgPill"), bgPillText=$("#bgPillText");
+let bgPollBusy=false;
+async function pollBg(){
+  if(bgPollBusy || document.visibilityState!=="visible") return;
+  bgPollBusy=true;
+  try{
+    const s=await (await fetch("/status")).json();
+    if(s.busy){
+      bgPillText.textContent =
+        s.memory_jobs && s.recaps ? "updating memory + wrapping up conversation…" :
+        s.recaps                  ? "wrapping up last conversation…" :
+                                    "updating memory…";
+      bgPill.hidden=false;
+    }else{
+      bgPill.hidden=true;
+    }
+  }catch(_){ /* server briefly busy with a turn — just skip this tick */ }
+  bgPollBusy=false;
+}
+setInterval(pollBg, 4000);
+document.addEventListener("visibilitychange", pollBg);
+pollBg();
 
 // file upload
 const fileInput=$("#fileInput"), uploadLabel=$("#uploadLabel");

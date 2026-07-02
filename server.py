@@ -170,10 +170,25 @@ _strata = None
 _embedder = None    # real embedding model if available, else None (dump-all recall)
 _lock = threading.Lock()
 
-# Background fact-extraction jobs: (user_text, event_id, llm_cfg). Filled at the
-# tail of each turn, drained by the memory worker so the slow extraction LLM call
-# never runs while the turn holds _lock (which would stall the next turn).
+# Background fact-extraction jobs: (user_text, event_id, llm_cfg, candidate,
+# context). Filled at the tail of each turn, drained by the memory worker so the
+# slow extraction LLM call never runs while the turn holds _lock (which would
+# stall the next turn).
 _mem_jobs: "queue.Queue" = queue.Queue()
+
+# Live background-work counters, surfaced at GET /status so the UI can show a
+# subtle "updating memory…" indicator (and warn that brand-new facts/recaps may
+# not be recallable until the work finishes). Plain ints under the GIL — a
+# transiently stale count only affects a status pill, nothing else.
+_bg = {"memory": 0, "recap": 0}
+
+
+def _bg_start(kind: str) -> None:
+    _bg[kind] = _bg.get(kind, 0) + 1
+
+
+def _bg_end(kind: str) -> None:
+    _bg[kind] = max(0, _bg.get(kind, 0) - 1)
 
 _history: list[dict] = []
 _session: dict | None = None   # the in-progress call
@@ -371,21 +386,35 @@ def _backfill_recaps() -> None:
         bf = Strata.open(db_path=vc.DB_PATH)   # default embedder; we only need the canonical write
         done = 0
         try:
+            _bg_start("recap")
             for s in todo:
                 recap = vc.summarize_session(s["turns"], _llm_cfg())   # slow LLM, off-lock
-                if not recap:
-                    continue
-                ts = s.get("ended_at") or s.get("started_at")
-                ts_ms = int(ts * 1000) if isinstance(ts, (int, float)) else None
-                with _lock:                                            # brief: sqlite write + json
-                    vc.record_summary(bf, recap, ts_ms=ts_ms)
-                    cur = _read_json(SESSIONS_FILE, [])
-                    for c in cur:
-                        if c.get("id") == s.get("id"):
-                            c["summary"] = recap
-                    _write_json(SESSIONS_FILE, cur)
-                done += 1
+                if recap:
+                    ts = s.get("ended_at") or s.get("started_at")
+                    ts_ms = int(ts * 1000) if isinstance(ts, (int, float)) else None
+                    with _lock:                                        # brief: sqlite write + json
+                        vc.record_summary(bf, recap, ts_ms=ts_ms)
+                        cur = _read_json(SESSIONS_FILE, [])
+                        for c in cur:
+                            if c.get("id") == s.get("id"):
+                                c["summary"] = recap
+                        _write_json(SESSIONS_FILE, cur)
+                    done += 1
+                # a session that never reached finalize also never got its fact
+                # harvest — recover it here so an interrupted background job is
+                # always completed on the next launch (dedup makes this safe)
+                try:
+                    existing = [m["text"] for m in vc.list_memories(bf)]
+                    facts = vc.harvest_session_facts(s["turns"], existing, _llm_cfg())
+                    if facts:
+                        with _lock:
+                            added = vc.add_facts(bf, facts)
+                        if added:
+                            print("[memory] harvested (backfill):", added)
+                except Exception as e:
+                    print(f"[memory] backfill harvest failed: {e}")
         finally:
+            _bg_end("recap")
             bf.close()
         if done:
             print(f"  · backfilled {done} conversation recap{'s' if done != 1 else ''}")
@@ -423,23 +452,30 @@ def _memory_worker() -> None:
             if st is None:
                 continue
             text, event_id, cfg, candidate, ctx = job
-            # explicit "remember …" first: the smoothing layer judges + rewrites
-            # it (or falls back to verbatim if the LLM is unreachable) so an
-            # explicit command is never lost and never stored as garble.
-            if candidate:
-                polished = vc.polish_fact(candidate, cfg)          # slow LLM, off-lock
-                if polished:
-                    with _lock:
-                        added = vc.add_facts(st, [polished], event_id)
+            _bg_start("memory")
+            t0 = time.monotonic()
+            try:
+                # explicit "remember …" first: the smoothing layer judges + rewrites
+                # it (or falls back to verbatim if the LLM is unreachable) so an
+                # explicit command is never lost and never stored as garble.
+                if candidate:
+                    polished = vc.polish_fact(candidate, cfg)          # slow LLM, off-lock
+                    if polished:
+                        with _lock:
+                            added = vc.add_facts(st, [polished], event_id)
+                        if added:
+                            print("[memory] remembered:", added)
+                existing = [m["text"] for m in vc.list_memories(st)]   # read, off-lock
+                new_facts = vc.extract_facts_llm(text, existing, cfg, context=ctx)  # slow LLM, off-lock
+                if new_facts:
+                    with _lock:                                        # brief write, serialized
+                        added = vc.add_facts(st, new_facts, event_id)
                     if added:
-                        print("[memory] remembered:", added)
-            existing = [m["text"] for m in vc.list_memories(st)]   # read, off-lock
-            new_facts = vc.extract_facts_llm(text, existing, cfg, context=ctx)  # slow LLM, off-lock
-            if new_facts:
-                with _lock:                                        # brief write, serialized
-                    added = vc.add_facts(st, new_facts, event_id)
-                if added:
-                    print("[memory] extracted:", added)
+                        print("[memory] extracted:", added)
+                print(f"[memory] turn job done in {time.monotonic()-t0:.1f}s "
+                      f"({_mem_jobs.qsize()} queued)")
+            finally:
+                _bg_end("memory")
         except Exception as e:
             print("[memory] extraction error:", e)
         finally:
@@ -845,7 +881,10 @@ def _recap_session(sess: dict) -> None:
     facts scattered across turns ("I have an interview" … "it's next Tuesday" …
     "it's a builder role") that per-turn extraction can't assemble.
     Same discipline as _backfill_recaps — slow LLM calls off-lock, brief writes
-    under _lock. If the process dies first, the startup backfill catches the recap."""
+    under _lock. If the process dies first, the startup backfill catches BOTH
+    (it re-recaps and re-harvests any session left without a summary)."""
+    _bg_start("recap")
+    t0 = time.monotonic()
     try:
         recap = vc.summarize_session(sess["turns"], _llm_cfg())   # slow, off-lock
         if recap:
@@ -870,6 +909,9 @@ def _recap_session(sess: dict) -> None:
                 print("[memory] harvested:", added)
     except Exception as e:
         print("[memory] harvest failed:", e)
+    finally:
+        _bg_end("recap")
+        print(f"[recap] session wrap-up done in {time.monotonic()-t0:.1f}s")
 
 
 def _persist_session() -> None:
@@ -1174,6 +1216,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/config":
             return self._json(200, {"name": _settings()["assistant_name"],
                                     "vad_port": VAD_PORT})
+        if u.path == "/status":
+            # live background work, for the UI's "updating memory…" pill
+            mem = _bg["memory"] + _mem_jobs.qsize()
+            return self._json(200, {"memory_jobs": mem, "recaps": _bg["recap"],
+                                    "busy": bool(mem or _bg["recap"])})
         if u.path == "/settings":
             s = _settings()
             out = {k: s[k] for k in SETTINGS_FIELDS}
