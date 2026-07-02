@@ -1363,7 +1363,7 @@ async function start(){
   started=true;
   await fetch("/reset",{method:"POST"});
   currentSessionId=null; drawerView="current";   // fresh call defaults to the live view
-  setHistoryCollapsed(window.matchMedia("(max-width: 820px)").matches);
+  setHistoryCollapsed(true);   // start with the panel closed — open it from ☰ when wanted
   showView("call");
   callStart=Date.now(); timerInt=setInterval(tickTimer,1000); tickTimer();
   setState("idle"); levelLoop();
