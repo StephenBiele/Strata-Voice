@@ -115,7 +115,8 @@ info "Tier: $TIER_NAME  ·  chat: $CHAT_MODEL$( [ -n "$MEM_MODEL" ] && echo "  �
 
 # ---- 5. pull models -----------------------------------------------------------
 pull() {
-  if ollama list 2>/dev/null | awk '{print $1}' | grep -qx "$1"; then
+  # ollama list shows bare names as "name:latest" — match both forms
+  if ollama list 2>/dev/null | awk '{print $1}' | grep -qxe "$1" -e "$1:latest"; then
     ok "$1 (already downloaded)"
   else
     info "Downloading $1 …"
