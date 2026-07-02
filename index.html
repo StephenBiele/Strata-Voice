@@ -13,7 +13,7 @@
     --paper-deep: oklch(0.935 0.018 118);
     --ink: oklch(0.34 0.045 132);
     --ink-soft: oklch(0.50 0.035 132);
-    --ink-faint: oklch(0.62 0.028 132 / .7);
+    --ink-faint: oklch(0.53 0.032 132 / .92);  /* subtext: dark enough to actually read */
     --sage: oklch(0.80 0.075 130);
     --sage-deep: oklch(0.66 0.10 133);
     --sage-edge: oklch(0.58 0.095 135);
@@ -1051,6 +1051,10 @@
         <input type="number" id="set_numctx" min="0" max="131072" step="256" value="0" inputmode="numeric">
         <div class="hint">Ollama only. 0 = model default.</div>
       </div>
+      <div class="field"><label>Memory model</label>
+        <select id="set_memmodel" class="select"><option value="">Same as chat model</option></select>
+        <div class="hint">Which model writes memories (saving facts, recaps) in the background. A bigger model makes more accurate memories — and since it never runs during a reply, it doesn't slow the conversation.</div>
+      </div>
 
       <h3 class="subhead">Speech recognition</h3>
       <p class="hint" style="margin:-.4rem 0 1rem">Which model turns your voice into text. Switching downloads the model the first time — that can take a minute.</p>
@@ -1643,6 +1647,19 @@ async function loadSettings(){
   $("#set_vad_prefix").value=vpre; $("#set_vad_prefixval").textContent=vpre+" ms";
   const vmin=(s.vad_min_speech_ms!=null?s.vad_min_speech_ms:250);
   $("#set_vad_minspeech").value=vmin; $("#set_vad_minspeechval").textContent=vmin+" ms";
+  // memory model picker (background memory work; "" = same as chat model)
+  try{
+    const md=$("#set_memmodel");
+    const d=await (await fetch("/ollama/models")).json();
+    const names=(d.models||[]).map(m=>m.name||m.model).filter(Boolean);
+    md.innerHTML='<option value="">Same as chat model</option>'+
+      names.map(n=>`<option value="${n}">${n}</option>`).join("");
+    md.value=s.memory_model||"";
+    if(md.value!==(s.memory_model||"")){   // saved model no longer installed
+      md.innerHTML+=`<option value="${s.memory_model}">${s.memory_model} (not installed)</option>`;
+      md.value=s.memory_model;
+    }
+  }catch(_){}
   $("#setModel").innerHTML=modelConfigHTML("set");
   wireModelConfig("set"); fillModelConfig("set", s);
   // speech recognition (ASR) picker
@@ -1708,6 +1725,7 @@ async function saveSettings(){
     asr_model:asr?asr.model:undefined,
     asr_backend:asr?asr.backend:undefined,
     mic_device:$("#set_micdev").value,
+    memory_model:$("#set_memmodel").value,
     vad_enabled:$("#set_vad_enabled").getAttribute("aria-checked")==="true",
     vad_barge_in:$("#set_vad_bargein").getAttribute("aria-checked")==="true",
     vad_threshold:parseFloat($("#set_vad_thresh").value),

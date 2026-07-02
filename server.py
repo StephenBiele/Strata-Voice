@@ -81,6 +81,10 @@ DEFAULT_SETTINGS = {
     "asr_backend": vc.ASR_BACKEND,       # 'mlx-audio' | 'parakeet-mlx'
     # Microphone input device (browser deviceId; "" = system default)
     "mic_device": "",
+    # Ollama model for background memory work ("" = same as chat model).
+    # Memory jobs run behind the conversation, so a bigger, slower model can
+    # write more accurate memories without touching voice latency.
+    "memory_model": "",
     # Hands-free (VAD): talk without holding; it detects speech start/stop
     "vad_enabled": False,                # hands-free mode armed on call start
     "vad_barge_in": True,                # speaking while it talks interrupts it
@@ -99,7 +103,7 @@ SETTINGS_FIELDS = (
     "tts_voice", "tts_speed",
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
-    "asr_model", "asr_backend", "mic_device",
+    "asr_model", "asr_backend", "mic_device", "memory_model",
     "vad_enabled", "vad_barge_in", "vad_threshold", "vad_silence_ms",
     "vad_prefix_ms", "vad_min_speech_ms", "debug_settings",
 )
@@ -281,6 +285,18 @@ def _llm_cfg(overrides: dict | None = None) -> dict:
     return cfg
 
 
+def _mem_llm_cfg() -> dict:
+    """LLM config for background memory work (polish/extract/harvest/recap).
+    Honors the optional memory_model setting: a bigger model can parse noisy
+    speech far better, and since these jobs run behind the conversation, its
+    slowness never touches voice latency. Empty = same model as chat."""
+    cfg = _llm_cfg()
+    mm = _settings().get("memory_model", "").strip()
+    if mm and cfg.get("backend") == "ollama":
+        cfg["ollama_model"] = mm
+    return cfg
+
+
 def _load_models() -> None:
     global _asr, _asr_key, _tts, _strata, _embedder
     print("Loading models (first run downloads them)…")
@@ -388,7 +404,7 @@ def _backfill_recaps() -> None:
         try:
             _bg_start("recap")
             for s in todo:
-                recap = vc.summarize_session(s["turns"], _llm_cfg())   # slow LLM, off-lock
+                recap = vc.summarize_session(s["turns"], _mem_llm_cfg())   # slow LLM, off-lock
                 if recap:
                     ts = s.get("ended_at") or s.get("started_at")
                     ts_ms = int(ts * 1000) if isinstance(ts, (int, float)) else None
@@ -405,7 +421,7 @@ def _backfill_recaps() -> None:
                 # always completed on the next launch (dedup makes this safe)
                 try:
                     existing = [m["text"] for m in vc.list_memories(bf)]
-                    facts = vc.harvest_session_facts(s["turns"], existing, _llm_cfg())
+                    facts = vc.harvest_session_facts(s["turns"], existing, _mem_llm_cfg())
                     if facts:
                         with _lock:
                             added = vc.add_facts(bf, facts)
@@ -886,7 +902,7 @@ def _recap_session(sess: dict) -> None:
     _bg_start("recap")
     t0 = time.monotonic()
     try:
-        recap = vc.summarize_session(sess["turns"], _llm_cfg())   # slow, off-lock
+        recap = vc.summarize_session(sess["turns"], _mem_llm_cfg())   # slow, off-lock
         if recap:
             with _lock:
                 vc.record_summary(_strata, recap, ts_ms=int(sess["ended_at"] * 1000))
@@ -901,7 +917,7 @@ def _recap_session(sess: dict) -> None:
     try:
         with _lock:
             existing = [m["text"] for m in vc.list_memories(_strata)]
-        facts = vc.harvest_session_facts(sess["turns"], existing, _llm_cfg())  # slow, off-lock
+        facts = vc.harvest_session_facts(sess["turns"], existing, _mem_llm_cfg())  # slow, off-lock
         if facts:
             with _lock:
                 added = vc.add_facts(_strata, facts)
@@ -940,7 +956,7 @@ def _handle_turn(wav_bytes: bytes) -> dict:
         captured = vc.capture_memory(_strata, text, event_id)   # forgets only, immediate
         if captured:
             print("[memory]", captured)
-        _mem_jobs.put((text, event_id, _llm_cfg(), vc.remember_candidate(text),
+        _mem_jobs.put((text, event_id, _mem_llm_cfg(), vc.remember_candidate(text),
                        _recent_context()))
         mem = vc.list_memories(_strata)
         mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
@@ -1095,7 +1111,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         # and the LLM extraction pass distills everything else — with the last
         # few turns as context so fragments like "it's next Tuesday" resolve.
         # Nothing is stored verbatim, and none of it delays the next turn.
-        _mem_jobs.put((text, event_id, _llm_cfg(), vc.remember_candidate(text),
+        _mem_jobs.put((text, event_id, _mem_llm_cfg(), vc.remember_candidate(text),
                        _recent_context()))
 
     memories = [m["text"] for m in vc.list_memories(_strata)]
