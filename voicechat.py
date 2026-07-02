@@ -25,6 +25,7 @@ import re
 import sys
 import tempfile
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -190,6 +191,16 @@ def load_asr(model: str = ASR_MODEL, backend: str = ASR_BACKEND) -> _ASR:
 
 
 # ---- LLM ---------------------------------------------------------------------
+def _now_context() -> str:
+    """Current local date + time for the model. Local-first app: the server clock
+    is the user's clock, so no timezone round-trip is needed. Lets the assistant
+    greet by time of day and reason about 'today' / 'this morning' naturally."""
+    now = datetime.now().astimezone()
+    stamp = now.strftime("%A, %B %-d, %Y at %-I:%M %p")
+    tz = now.strftime("%Z") or "local time"
+    return f"Current date and time: {stamp} ({tz})."
+
+
 def build_messages(history, memories, documents=None, profile=None,
                    persona: str | None = None, recent=None) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
@@ -203,6 +214,9 @@ def build_messages(history, memories, documents=None, profile=None,
     system = persona or PERSONA_PROMPT
     if profile:
         system += f"\n\n{profile}"
+    system += ("\n\n" + _now_context() +
+               " Use this for time-aware replies (greetings, time of day, \"today\"); "
+               "don't state the date or time unless it's relevant.")
     system += f"\n\nCURRENT MEMORIES:\n{mem_block}"
     if recent:
         joined = "\n".join(f"- {r}" for r in recent)
