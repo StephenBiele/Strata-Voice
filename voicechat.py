@@ -80,7 +80,8 @@ family, pets, preferences, allergies), append:  [MEM_ADD] <short fact>
 - If the user asks you to forget something, append:  [MEM_DEL] <keywords>
 Write memories the way a person remembers: the GIST, in clean third person \
 ("Has a job interview on Tuesday") — never the user's verbatim wording, filler \
-words, or transcription noise. One complete thought per fact.
+words, or transcription noise, but keep anchor details (names, dates, numbers, \
+places) exactly as the user said them. One complete thought per fact.
 Only emit a directive for genuinely durable facts or explicit forget requests. \
 Never emit one for small talk, questions, or transient events."""
 
@@ -540,6 +541,13 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip(" .,!?;:'\"").strip()
 
 
+def _mem_cfg(cfg: dict | None) -> dict:
+    """Config for memory-writing LLM calls: temperature 0 and no thinking.
+    Distillation should be deterministic — the chat temperature is tuned for
+    personality, which is exactly what causes detail drift in stored facts."""
+    return {**(cfg or {}), "temperature": 0.0, "thinking": False}
+
+
 def capture_memory(strata, user_text: str, event_id: int | None = None) -> list[str]:
     """Apply explicit forget-requests from a user utterance immediately.
     Returns a list of change descriptions for logging. (Fact WRITES happen in
@@ -577,7 +585,11 @@ def remember_candidate(user_text: str) -> str | None:
 _POLISH_PROMPT = """The user explicitly asked their assistant to remember something. The request below \
 comes from a voice transcript and may contain mis-transcriptions or filler words.
 Rewrite it as ONE short, clean memory in the third person (e.g. "Has a job interview on Tuesday", \
-"Prefers replies to be brief"). Fix obvious transcription garble; keep every real detail; add nothing.
+"Prefers replies to be brief"). Fix obvious transcription garble; keep every real detail; add nothing. Copy anchor details \
+(names, dates, days, times, numbers, places, titles) EXACTLY as said — paraphrase only the words \
+around them. The request is the USER speaking in the first person — keep who-did-what correct.
+Example: "remember that I gave them my report on Friday umm about the budget stuff" -> \
+"Gave them a report about the budget on Friday".
 If it is actually a question or a request to recall/delete (not something to store), reply with exactly SKIP.
 Reply with ONLY the memory text (or SKIP) — no quotes, no explanation.
 
@@ -594,7 +606,7 @@ def polish_fact(candidate: str, cfg: dict | None = None) -> str | None:
         return None
     fallback = candidate[0].upper() + candidate[1:]
     try:
-        reply = llm_complete([{"role": "user", "content": _POLISH_PROMPT.format(text=candidate)}], cfg)
+        reply = llm_complete([{"role": "user", "content": _POLISH_PROMPT.format(text=candidate)}], _mem_cfg(cfg))
         reply = _THINK_TAG.sub("", reply).strip().strip('"').strip()
     except Exception as e:
         print(f"[memory] polish failed ({e}); storing verbatim")
@@ -613,6 +625,7 @@ _EXTRACT_PROMPT = """You pull durable facts about the user out of their latest m
 The message is a voice transcript and may contain mis-transcriptions, filler, and run-ons — NEVER copy \
 garbled wording into a fact. Write each fact cleanly in your own words; if a passage is too garbled to \
 be sure what was meant, skip it rather than guess.
+Copy anchor details — names, dates, days of the week, times, numbers, places, and titles — EXACTLY as the user said them; paraphrase only the wording around them, never the anchors.
 Return ONLY a JSON array of short factual strings written in the third person, e.g.
 ["Has a dog named Rex", "Works as a nurse", "Has a job interview on Tuesday", "Allergic to shellfish"].
 Include stable things: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, health, upcoming commitments (interviews, appointments), and notable life facts.
@@ -648,7 +661,7 @@ def extract_facts_llm(user_text: str, existing: list[str], cfg: dict | None = No
         context=ctx)
     try:
         raw = llm_complete([{"role": "user", "content": prompt}],
-                           {**(cfg or {}), "thinking": False})
+                           _mem_cfg(cfg))
     except Exception as e:
         print(f"[memory] extraction call failed: {e}")
         return []
@@ -691,6 +704,7 @@ and the role in a third become one fact: "Has an interview next Tuesday with the
 building internal tools").
 The transcript is from speech recognition and may contain mis-transcriptions and clipped sentence \
 starts — never copy garbled wording; write each fact cleanly, and skip what you can't confidently parse.
+Copy anchor details — names, dates, days of the week, times, numbers, places, and titles — EXACTLY as the user said them; paraphrase only the wording around them, never the anchors.
 Return ONLY a JSON array of short factual strings in the third person.
 Include: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, \
 upcoming commitments (interviews, appointments, deadlines), notable experience and accomplishments.
@@ -720,7 +734,7 @@ def harvest_session_facts(turns: list[dict], existing: list[str],
         transcript=_transcript_text(turns))
     try:
         raw = llm_complete([{"role": "user", "content": prompt}],
-                           {**(cfg or {}), "thinking": False})
+                           _mem_cfg(cfg))
     except Exception as e:
         print(f"[memory] harvest call failed: {e}")
         return []
@@ -813,7 +827,7 @@ def summarize_session(turns: list[dict], cfg: dict | None = None) -> str:
     try:
         out = llm_complete(
             [{"role": "user", "content": _SUMMARY_PROMPT.format(transcript=transcript)}],
-            {**(cfg or {}), "thinking": False})
+            _mem_cfg(cfg))
         out = re.sub(r"\s+", " ", out).strip()
         if out:
             return out[:300]
