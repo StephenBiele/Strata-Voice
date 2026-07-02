@@ -119,6 +119,10 @@
     box-shadow:0 10px 24px -20px oklch(0.4 0.05 130 / .8);
     transition:background .2s var(--ease), transform .15s var(--ease), color .2s var(--ease);
   }
+  /* the [hidden] attribute alone loses to .history-toggle's display:inline-flex,
+     so a toggled-off button (e.g. the debug tuning button) kept showing — this
+     wins it back */
+  .history-toggle[hidden]{ display:none; }
   .history-toggle:hover{ background:oklch(0.97 0.02 120); color:var(--ink); transform:translateY(-1px); }
   .history-toggle .icon{ font-size:1rem; line-height:1; }
   .history-toggle .label{ font-size:.86rem; }
