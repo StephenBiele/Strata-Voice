@@ -20,6 +20,7 @@ import base64
 import io
 import json
 import os
+import queue
 import re
 import threading
 import time
@@ -149,6 +150,11 @@ _tts = None
 _strata = None
 _embedder = None    # real embedding model if available, else None (dump-all recall)
 _lock = threading.Lock()
+
+# Background fact-extraction jobs: (user_text, event_id, llm_cfg). Filled at the
+# tail of each turn, drained by the memory worker so the slow extraction LLM call
+# never runs while the turn holds _lock (which would stall the next turn).
+_mem_jobs: "queue.Queue" = queue.Queue()
 
 _history: list[dict] = []
 _session: dict | None = None   # the in-progress call
@@ -362,6 +368,48 @@ def _backfill_recaps() -> None:
             print(f"  · backfilled {done} conversation recap{'s' if done != 1 else ''}")
     except Exception as e:
         print(f"[recap] backfill failed: {e}")
+
+
+def _memory_worker() -> None:
+    """Background fact-extraction worker. The 'what should I remember?' LLM pass
+    used to run inline at the tail of every turn while the turn still held _lock —
+    so your *next* question waited on the *previous* turn's bookkeeping. The turn
+    now enqueues (text, event_id, cfg) and returns immediately; this thread does
+    the multi-second LLM call off the critical path.
+
+    Pattern mirrors _backfill_recaps: own Strata connection (DB is WAL, so a second
+    connection is safe), the slow LLM call runs off-lock, and only the brief
+    canonical write is taken under _lock (so the two connections never collide on
+    SQLite). New facts land in the canonical store and are visible to the main
+    connection's next read, so dump-all recall sees them right away; only large-
+    store *vector* recall of a just-extracted fact may lag until the next index
+    warm — a rare edge, and deterministic capture already handled obvious facts."""
+    try:
+        from strata.gateway.api import Strata
+        st = Strata.open(db_path=vc.DB_PATH, embedder=vc.make_embedder())
+    except Exception as e:
+        print(f"[memory] extraction worker disabled ({e}); "
+              "facts are still captured deterministically inline")
+        st = None
+    while True:
+        job = _mem_jobs.get()
+        try:
+            if job is None:
+                return
+            if st is None:
+                continue
+            text, event_id, cfg = job
+            existing = [m["text"] for m in vc.list_memories(st)]   # read, off-lock
+            new_facts = vc.extract_facts_llm(text, existing, cfg)  # slow LLM, off-lock
+            if new_facts:
+                with _lock:                                        # brief write, serialized
+                    added = vc.add_facts(st, new_facts, event_id)
+                if added:
+                    print("[memory] extracted:", added)
+        except Exception as e:
+            print("[memory] extraction error:", e)
+        finally:
+            _mem_jobs.task_done()
 
 
 # ---- speech synthesis --------------------------------------------------------
@@ -776,15 +824,10 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
             _session["title"] = text[:60]
         _persist_session()
         # LLM extraction pass — captures durable facts from natural speech that the
-        # deterministic patterns miss. Runs after the reply, so it never delays output.
-        try:
-            cur = [m["text"] for m in vc.list_memories(_strata)]
-            new_facts = vc.extract_facts_llm(text, cur, _llm_cfg())
-            added = vc.add_facts(_strata, new_facts, event_id)
-            if added:
-                print("[memory] extracted:", added)
-        except Exception as e:
-            print("[memory] extraction error:", e)
+        # deterministic patterns miss. Handed to the background memory worker rather
+        # than run here: it's a full (multi-second) LLM call, and running it inline
+        # held _lock past the end of the turn, stalling the user's next question.
+        _mem_jobs.put((text, event_id, _llm_cfg()))
 
     memories = [m["text"] for m in vc.list_memories(_strata)]
     yield {"type": "done", "reply": reply, "memories": memories,
@@ -1177,10 +1220,12 @@ def main() -> int:
     # Recap any past conversations missing a summary, in the background so the slow
     # summary LLM calls never delay startup or the first turn.
     threading.Thread(target=_backfill_recaps, name="recap-backfill", daemon=True).start()
+    # Drain background fact-extraction jobs so that LLM call never stalls a turn.
+    threading.Thread(target=_memory_worker, name="memory-worker", daemon=True).start()
     srv = HTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
     print(f"\n  ✦ {ASSISTANT_NAME} is listening at {url}")
-    print("    Open it in your browser, click Start, hold Space to talk.\n")
+    print("    Open it in your browser, click Start, then hold the orb (or button) to talk.\n")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
