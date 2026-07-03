@@ -1469,13 +1469,8 @@ function tickTimer(){
 function end(){
   disarmHandsFree();              // stop feeding + /vad/stop
   if(turnAbort){ try{ turnAbort.abort(); }catch(_){} }
-  stopPlayback();
   releaseMic();
-  if(ac) ac.close();
-  // the analyser belongs to the context we just closed — using it on the next
-  // call throws on every audio chunk (the "restarted call is frozen" bug)
-  try{ if(streamAnalyser) streamAnalyser.disconnect(); }catch(_){}
-  streamAnalyser=null; playAnalyser=null; nextStartTime=0; activeSources=[];
+  teardownAudioContext();   // closes ac + clears analysers (frees the mic for other apps)
   clearInterval(timerInt);
   started=false; holding=false; busy=false;
   if(muted) setMuted(false);
@@ -2071,6 +2066,7 @@ function stopPlayback(){
 }
 async function enqueueChunk(b64){
   firstTurnDone=true;   // a reply is arriving → the model is warm now
+  if(!ac) return;       // context was torn down (muted) — nothing to play into
   const ep=playbackEpoch;
   const bytes=Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
   let buf; try{ buf=await ac.decodeAudioData(bytes.buffer); }catch(_){ return; }
@@ -2095,6 +2091,17 @@ let chatBusy=false;
 function ensureAudio(){
   if(!ac) ac = new (window.AudioContext||window.webkitAudioContext)();
   if(ac.state==="suspended") ac.resume();
+}
+// Safari holds the microphone (and the audio session) until the AudioContext is
+// CLOSED — stopping the track isn't enough — which locks other apps (e.g. Discord
+// while screen-sharing) out of the mic. Closing it hands the device back;
+// ensureAudio() rebuilds a fresh context when voice is next needed.
+function teardownAudioContext(){
+  stopPlayback();
+  try{ if(streamAnalyser) streamAnalyser.disconnect(); }catch(_){}
+  streamAnalyser=null; playAnalyser=null; nextStartTime=0; activeSources=[];
+  try{ if(ac) ac.close(); }catch(_){}
+  ac=null;
 }
 async function streamChat(text, {speak, onToken, onAudio, onDone, onError, onReasoning}){
   let r;
@@ -2423,12 +2430,18 @@ function setMuted(on){
   if(on){
     pendingStartMs=null;               // drop any half-heard utterance
     if(!holding) releaseMic();         // OS mic light off
-    if(state==="listening") setState("idle"); else if(state==="idle") setState("idle");
+    // Close the audio context so Safari actually hands the mic back to the OS /
+    // other apps (Discord). Any in-progress spoken reply stops with it.
+    teardownAudioContext();
+    setState("idle");
   }else{
-    // unmute = turn voice on. If voice was never armed (entered via text mode),
-    // arm it now; if it was armed and just mic-muted, re-open the mic.
-    if(started && !handsFree){ armHandsFree(); return; }   // armHandsFree owns the status
-    if(handsFree && started && !micStream) acquireMic();
+    // unmute = turn voice on. Rebuild the audio context first (it was closed on
+    // mute), then arm voice if it was never armed, or re-open the mic if it was.
+    if(started){
+      ensureAudio();
+      if(!handsFree){ armHandsFree(); return; }   // armHandsFree owns the status
+      if(!micStream) acquireMic();
+    }
     setState(state);                   // repaint the hint
   }
 }
