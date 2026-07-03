@@ -53,8 +53,7 @@ Then:
 
 Ollama starts if needed, the server launches, and your browser opens to
 **http://localhost:8765**. Click **Start conversation**, allow the microphone, and
-**just start talking** — it hears when you speak. (Prefer push-to-talk? Flip "Manual
-turns" in the conversation menu.)
+**just start talking** — it hears when you speak.
 
 > **Requirements:** macOS on Apple Silicon (M1 or newer). Non-interactive installs:
 > `./install.sh --light` or `./install.sh --recommended`. Re-running the installer is
