@@ -58,7 +58,12 @@
   .view.panel[hidden]{ opacity:0; transform:translateX(100%); }
 
   /* ---------- landing ---------- */
-  #landing{ gap:clamp(1.8rem,5vh,3rem); padding:2rem; text-align:center; }
+  /* grouped rhythm: name+tagline sit together, the action cluster sits together,
+     then the nav — instead of one flat gap between everything */
+  #landing{ gap:clamp(2rem,6vh,3.4rem); padding:2rem; text-align:center; }
+  .landing-hero{ display:flex; flex-direction:column; align-items:center; gap:.7rem; }
+  .landing-actions{ display:flex; flex-direction:column; align-items:center; gap:1rem; }
+  .landing-actions .hint{ margin:0; }
   .mark{ position:relative; width:clamp(150px,32vw,210px); aspect-ratio:1; }
   .wordmark{
     font-family:"Fraunces", serif; font-optical-sizing:auto; font-weight:440;
@@ -861,14 +866,18 @@
 
   <!-- LANDING -->
   <section class="view" id="landing">
-    <div class="wordmark">{{ASSISTANT_NAME}}</div>
-    <p class="tagline">Your private, on-device voice companion that <em>remembers</em>.</p>
-    <button class="begin" id="beginBtn">
-      <svg class="micico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg>
-      Start conversation
-    </button>
-    <p class="hint">Just start talking — it hears when you speak.</p>
-    <button class="textlink" id="beginChatBtn">Send a message instead</button>
+    <div class="landing-hero">
+      <div class="wordmark">{{ASSISTANT_NAME}}</div>
+      <p class="tagline">Your private, on-device voice companion that <em>remembers</em>.</p>
+    </div>
+    <div class="landing-actions">
+      <button class="begin" id="beginBtn">
+        <svg class="micico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/></svg>
+        Start conversation
+      </button>
+      <p class="hint">Once you're in, just talk — it hears when you speak.</p>
+      <button class="textlink" id="beginChatBtn">Rather type? Start with a message</button>
+    </div>
     <nav class="landingnav">
       <button data-view="memory">Memory</button><span>·</span>
       <button data-view="profile">Profile</button><span>·</span>
@@ -910,7 +919,7 @@
       <div class="callspacer"></div>
       <div class="topbar">
         <div class="name">{{ASSISTANT_NAME}} <span class="timer" id="timer">00:00</span></div>
-        <div class="byline">connected</div>
+        <div class="byline">on-device</div>
       </div>
       <div class="calltools">
         <button class="history-toggle iconbtn" id="incognitoBtn" role="switch" aria-checked="false" aria-label="Incognito — don't save this conversation" title="Incognito — don't save this conversation">
@@ -1002,7 +1011,7 @@
       <div class="switchrow">
         <div>
           <div class="switchlabel">Thinking</div>
-          <div class="switchsub">Let reasoning models think before answering. Off is noticeably faster for voice.</div>
+          <div class="switchsub">Let models that think step-by-step reason before answering. Off is noticeably faster for voice.</div>
         </div>
         <button class="switch" id="set_thinking" role="switch" aria-checked="false"><span class="knob"></span></button>
       </div>
@@ -1024,19 +1033,19 @@
 
       <h3 class="subhead">Cadence (experimental)</h3>
       <p class="hint" style="margin:-.4rem 0 1rem">Speech rhythm and pacing.</p>
-      <div class="field"><label>Chunking</label>
+      <div class="field"><label>Phrasing</label>
         <select id="set_chunking" class="select">
           <option value="sentence">Sentence — Fast; sentence-by-sentence.</option>
           <option value="clause">Clause — Quick bursts, breaks at commas.</option>
           <option value="hybrid">Hybrid — Snappy start, then smooths out.</option>
           <option value="whole">Whole — Slowest start, most natural phrasing.</option>
         </select>
-        <div class="hint">How speech is broken up.</div>
+        <div class="hint">How the reply is split into spoken phrases.</div>
       </div>
       <div class="switchrow">
         <div>
-          <div class="switchlabel">Tighten pauses</div>
-          <div class="switchsub">Smooths out awkward pauses.</div>
+          <div class="switchlabel">Trim silence</div>
+          <div class="switchsub">Cuts dead air at the edges of each phrase.</div>
         </div>
         <button class="switch" id="set_trim" role="switch" aria-checked="true"><span class="knob"></span></button>
       </div>
@@ -1073,7 +1082,7 @@
       <div class="field">
         <label>Top-p · <span class="speedval" id="set_toppval">1.0</span></label>
         <input type="range" id="set_topp" class="slider" min="0.1" max="1" step="0.05" value="1">
-        <div class="hint">Nucleus sampling. 1.0 = off.</div>
+        <div class="hint">Pairs with temperature to control variety. Lower keeps replies more predictable; leave at 1.0 to turn it off.</div>
       </div>
       <div class="field"><label>Max response tokens</label>
         <input type="number" id="set_maxtokens" min="0" max="32768" step="1" value="0" inputmode="numeric">
@@ -1209,20 +1218,6 @@
   </section>
 
   <!-- TEXT CHAT -->
-  <section class="view panel" id="textchat" hidden>
-    <header class="panelhead">
-      <button class="back" data-back aria-label="Back">←</button>
-      <h2>Message {{ASSISTANT_NAME}}</h2>
-    </header>
-    <div class="chatpane">
-      <div class="chatlog" id="chatLog"></div>
-      <form class="composer" id="chatComposer">
-        <textarea id="chatInput" rows="1" placeholder="Type a message…" aria-label="Message"></textarea>
-        <button type="submit" class="sendbtn" id="chatSend" aria-label="Send message">Send</button>
-      </form>
-      <label class="speakrow"><input type="checkbox" id="chatSpeak"> <span>Speak replies aloud</span></label>
-    </div>
-  </section>
 
 </div>
 
@@ -1412,14 +1407,14 @@ function dockComposer(){
 }
 
 /* ---------- start / end ---------- */
-async function start(){
+async function start(textMode=false){
   if(started) return;
   // leaving a previous "conversation ended" state (New conversation / re-entry)
   callEnded=false;
   call.classList.remove("call-ended");
   document.getElementById("newConvoBtn").hidden=true;
   document.getElementById("endedHome").hidden=true;
-  if(bylineEl) bylineEl.textContent = incognito ? "incognito · not saved" : "connected";
+  if(bylineEl) bylineEl.textContent = incognito ? "incognito · not saved" : "on-device";
   ac = new (window.AudioContext||window.webkitAudioContext)();
   // Ask for mic permission NOW (during the Start-conversation transition) so the
   // first hold-to-talk works instantly with no prompt. We release it right away —
@@ -1437,11 +1432,14 @@ async function start(){
   started=true;
   await fetch("/reset",{method:"POST"});
   currentSessionId=null; drawerView="current";   // fresh call defaults to the live view
-  setHistoryCollapsed(true);   // start with the panel closed — open it from ☰ when wanted
+  // text entry opens the conversation panel so you can read the thread; voice
+  // entry keeps it closed (the orb carries the state)
+  setHistoryCollapsed(!textMode);
   showView("call");
+  muted=false;   // reset before the mode decision below
   callStart=Date.now(); timerInt=setInterval(tickTimer,1000); tickTimer();
   setState("idle"); levelLoop();
-  // live voice is the only mode: pull the VAD tuning, then arm it
+  // pull the VAD tuning either way (used the moment voice is enabled)
   try{
     const s=await (await fetch("/settings")).json();
     micDevice=s.mic_device||"";
@@ -1455,7 +1453,14 @@ async function start(){
     vadCfg={vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:500,
             vad_prefix_ms:500, vad_min_speech_ms:250};
   }
-  armHandsFree();
+  if(textMode){
+    // quiet / text mode: mic off, replies come back as text — one tap on the
+    // mic turns on full voice-to-voice
+    setMuted(true);
+    setTimeout(()=>{ const i=$("#callChatInput"); if(i) i.focus(); }, 80);
+  }else{
+    armHandsFree();
+  }
 }
 function tickTimer(){
   const s=Math.floor((Date.now()-callStart)/1000);
@@ -1489,14 +1494,13 @@ function end(){
 }
 
 /* ---------- view navigation ---------- */
-const VIEWS=["landing","call","textchat","memory","chatDetail","profile","settings","modelsetup"];
+const VIEWS=["landing","call","memory","chatDetail","profile","settings","modelsetup"];
 function showView(id){
   VIEWS.forEach(v=>{ const el=document.getElementById(v); if(el) el.hidden=(v!==id); });
 }
 function openView(v){
   showView(v);
   if(v==="memory") openMemory(lastSub);
-  else if(v==="textchat") openTextChat();
   else if(v==="profile") loadProfile(false);
   else if(v==="settings") loadSettings();
 }
@@ -1913,6 +1917,7 @@ function drawerIsCurrent(){
 function drawerAppendUserPending(userText){
   // show your message + a "still finishing" indicator while the model replies
   if(!drawerIsCurrent()) return;
+  const ph=pastChatsDrawerBody.querySelector(".drawer-empty"); if(ph) ph.remove();  // clear placeholder
   pastChatsDrawerBody.appendChild(makeBubble("user", userText));
   drawerPending=makeBubble("assistant", "");
   drawerPending.classList.add("pending");
@@ -1948,7 +1953,7 @@ async function loadTimeline(){
   const body=$("#timelineBody");
   body.innerHTML=skeleton(4);
   let list=[]; try{ list=(await (await fetch("/timeline")).json()).timeline||[]; }catch(_){}
-  if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">No moments yet</span>Start a conversation and it’ll appear here, with what ${ASSISTANT_NAME} learned in each one.</div>`; return; }
+  if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">Nothing on the timeline yet</span>Start a conversation and it’ll appear here, with what ${ASSISTANT_NAME} learned in each one.</div>`; return; }
   body.innerHTML="";
   const tl=document.createElement("div"); tl.className="tl";
   let lastDay="";
@@ -2114,55 +2119,22 @@ async function streamChat(text, {speak, onToken, onAudio, onDone, onError, onRea
     }
   }
 }
-function addBubble(role, text){
-  const log=$("#chatLog");
-  const b=makeBubble(role, text);
-  log.appendChild(b); log.scrollTop=log.scrollHeight;
-  return b;
-}
-function openTextChat(){
-  const log=$("#chatLog");
-  if(log && !log.childElementCount){
-    log.innerHTML=`<div class="empty"><span class="big">Say hi</span>Type below — ${ASSISTANT_NAME} remembers across voice and text alike.</div>`;
-  }
-  const inp=$("#chatInput");
-  if(inp) setTimeout(()=>inp.focus(), 60);
-}
-async function sendTextChat(){
-  const inp=$("#chatInput"); const text=(inp.value||"").trim();
-  if(!text || chatBusy) return;
-  const log=$("#chatLog"); const em=log.querySelector(".empty"); if(em) em.remove();
-  chatBusy=true; inp.value=""; inp.style.height="auto";
-  const speak=$("#chatSpeak").checked;
-  if(speak){ ensureAudio(); stopPlayback(); }
-  addBubble("user", text);
-  const a=addBubble("assistant", "…"); a.classList.add("streaming");
-  let acc="";
-  await streamChat(text, {
-    speak,
-    onReasoning:()=>{ if(!acc) bubbleSetText(a, "Reasoning…"); },
-    onToken:(t)=>{ firstTurnDone=true; acc+=t; bubbleSetText(a, acc); log.scrollTop=log.scrollHeight; },
-    onAudio:(b64)=>{ enqueueChunk(b64); },
-    onDone:(m)=>{ bubbleSetText(a, m.reply||acc||"…"); a.classList.remove("streaming");
-                  if(speak) streamDone=true; flashMemory(m.memories); log.scrollTop=log.scrollHeight; },
-    onError:()=>{ bubbleSetText(a, acc||"Sorry — something went wrong."); a.classList.remove("streaming"); },
-  });
-  chatBusy=false; inp.focus();
-}
 async function sendCallChat(){
   const inp=$("#callChatInput"); const text=(inp.value||"").trim();
   if(!text || busy) return;
   inp.value=""; busy=true;
   stopPlayback(); setState("thinking"); showCaption(text, "user");
   lastUserText=text; drawerAppendUserPending(text);   // live-update the open conversation
+  const speak=!muted;   // quiet/text mode → text reply; voice mode → spoken
   let gotAudio=false, acc="";
   await streamChat(text, {
-    speak:true,
+    speak,
     onReasoning:()=>{ markReasoning(); },
-    onToken:(t)=>{ acc+=t; },
+    onToken:(t)=>{ acc+=t; if(!speak) showCaption(acc, "assistant"); },
     onAudio:(b64)=>{ gotAudio=true; enqueueChunk(b64); },
     onDone:(m)=>{ streamDone=true; currentSessionId=m.session||currentSessionId;
-                  showCaption(m.reply||acc, "assistant"); flashMemory(m.memories); drawerResolve(m.reply||acc); },
+                  showCaption(m.reply||acc, "assistant"); flashMemory(m.memories); drawerResolve(m.reply||acc);
+                  if(!speak) setState("idle"); },
     onError:()=>{ if(drawerPending) drawerResolve("…"); if(!gotAudio) setState("idle"); },
   });
   busy=false;
@@ -2404,7 +2376,7 @@ async function armHandsFree(){
   if(handsFree || !started || _arming) return;
   _arming=true;
   ensureAudio();
-  statusEl.textContent="warming up…";
+  statusEl.textContent="getting ready…";
   if(!vadBase){
     try{ const c=await (await fetch("/config")).json();
          vadBase=`http://${location.hostname}:${c.vad_port||8766}`; }catch(_){}
@@ -2480,7 +2452,7 @@ incognitoBtn.addEventListener("click",()=>{
   incognito=!incognito;
   incognitoBtn.setAttribute("aria-checked", incognito?"true":"false");
   document.body.classList.toggle("private", incognito);
-  if(bylineEl) bylineEl.textContent = incognito ? "incognito · not saved" : "connected";
+  if(bylineEl) bylineEl.textContent = incognito ? "incognito · not saved" : "on-device";
   if(incognito && drawerView==="current") openDrawerCurrent();  // refresh the private note
 });
 $("#segCurrent").addEventListener("click",()=>showDrawerView("current"));
@@ -2494,14 +2466,7 @@ document.addEventListener("click",(e)=>{
 });
 
 // text chat: landing entry, composer submit, in-call composer
-$("#beginChatBtn").addEventListener("click", ()=>openView("textchat"));
-$("#chatComposer").addEventListener("submit", (e)=>{ e.preventDefault(); sendTextChat(); });
-$("#chatInput").addEventListener("keydown", (e)=>{
-  if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendTextChat(); }
-});
-$("#chatInput").addEventListener("input", (e)=>{
-  e.target.style.height="auto"; e.target.style.height=Math.min(e.target.scrollHeight,140)+"px";
-});
+$("#beginChatBtn").addEventListener("click", ()=>start(true));   // text/quiet mode, same surface
 $("#callComposer").addEventListener("submit", (e)=>{ e.preventDefault(); sendCallChat(); });
 
 // ---------- memory tools: review / audit / eval ----------
@@ -2773,7 +2738,7 @@ fileInput.addEventListener("change", async (e)=>{
     const d=await r.json();
     if(!d.ok){ uploadLabel.textContent="+ Add a file"; alert(d.error||"Couldn’t read that file."); }
     else { uploadLabel.textContent="+ Add a file"; }
-  }catch(err){ uploadLabel.textContent="+ Add a file"; alert("Upload failed."); }
+  }catch(err){ uploadLabel.textContent="+ Add a file"; alert("Couldn’t upload that file. Check the file and try again."); }
   e.target.value=""; loadFiles();
 });
 
