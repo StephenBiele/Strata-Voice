@@ -1162,6 +1162,7 @@
       </div>
 
       <button class="savebtn" id="settingsSave">Save settings</button>
+      <div class="teststatus" id="set_savenote"></div>
     </div>
   </section>
 
@@ -1874,10 +1875,23 @@ async function saveSettings(){
     tst.textContent="Couldn’t load that voice engine: "+d.tts_error+" — kept your previous one.";
     btn.disabled=false; btn.textContent="Save settings"; return;
   }
-  if(asrChanged){ ast.className="teststatus"; ast.textContent="Speech model ready ✓"; }
+  if(asrChanged){ ast.className="teststatus ok"; ast.textContent="Speech model ready ✓"; }
   if(engChanged){ tst.className="teststatus ok"; tst.textContent="Voice engine ready ✓"; }
+  // Stay on the Settings page — no full reload. A reload would drop you out of
+  // Settings mid-switch, hide the engine-load feedback, and make a just-saved
+  // engine look like it reverted. Sync the in-memory settings so reopening (or
+  // re-saving) reflects what's now saved.
+  const nameChanged = (body.assistant_name||"") !== (_settingsCache.assistant_name||"");
+  _settingsCache = Object.assign({}, _settingsCache, body);
+  const note=$("#set_savenote");
+  note.className="teststatus ok"; note.textContent="Saved ✓";
+  if(nameChanged){   // the shown name is baked in at page load; only that needs a refresh
+    note.innerHTML='Saved ✓ — refresh the page to update the name everywhere. '
+      +'<button class="linkbtn" id="set_refreshNow">refresh now</button>';
+    const rb=document.getElementById("set_refreshNow"); if(rb) rb.addEventListener("click",()=>location.reload());
+  }
   btn.textContent="Saved ✓";
-  setTimeout(()=>{ btn.disabled=false; btn.textContent="Save settings"; location.reload(); }, 700);
+  setTimeout(()=>{ btn.disabled=false; btn.textContent="Save settings"; }, 1200);
 }
 
 /* ---------- onboarding model step ---------- */
