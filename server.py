@@ -904,7 +904,8 @@ def _synth_sentence(text: str, voice: str, speed: float, *,
     """Synthesize one segment. Returns float32 @ TTS_SR (empty on failure)."""
     text = _for_speech(text, smoothing)
     if _emotion_active():
-        text = vc.fix_leading_tags(text)     # keep tags, but not at the chunk's front
+        # official tags only (off-vocab guesses get read aloud), none at the front
+        text = vc.fix_leading_tags(vc.sanitize_emotion_tags(text))
     else:
         text = vc.strip_emotion_tags(text)   # engine can't speak tags → drop them
     if not text:

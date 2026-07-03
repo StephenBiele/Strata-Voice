@@ -181,7 +181,9 @@ def patch_kokoro_tts() -> None:
 # they get stripped. Kept deliberately small — the events Turbo renders cleanly.
 EMOTION_TAGS = ("laugh", "chuckle", "sigh", "gasp", "cough", "sniffle", "groan", "yawn")
 _TAG_RE = re.compile(r"\[(" + "|".join(EMOTION_TAGS) + r")\]", re.IGNORECASE)
-_ANY_TAG_RE = re.compile(r"\[[a-zA-Z]{2,12}\]")   # also catch off-vocab guesses
+# Off-vocab guesses too, including multi-word ones ([clears throat]). Letters and
+# spaces only, so [MEM_ADD] directives are never touched.
+_ANY_TAG_RE = re.compile(r"\[[a-zA-Z][a-zA-Z ]{1,18}\]")
 
 
 def strip_emotion_tags(text: str) -> str:
@@ -190,6 +192,15 @@ def strip_emotion_tags(text: str) -> str:
     memory) so a fact never contains '[laugh]'."""
     text = _ANY_TAG_RE.sub("", text)
     text = re.sub(r"\s+([,.!?;:])", r"\1", text)   # close the gap before punctuation
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+def sanitize_emotion_tags(text: str) -> str:
+    """Keep only the official tags; drop off-vocab guesses ([whisper], [giggle],
+    [clears throat]…). Verified by audition: Chatterbox-Turbo performs only the
+    documented set — anything else it reads out loud as a word."""
+    text = _ANY_TAG_RE.sub(lambda m: m.group(0) if _TAG_RE.fullmatch(m.group(0)) else "", text)
+    text = re.sub(r"\s+([,.!?;:])", r"\1", text)
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
