@@ -1006,7 +1006,22 @@
         <div class="hint">Memory instructions are always added automatically, so memory keeps working no matter what you write here.</div>
       </div>
       <h3 class="subhead">Voice</h3>
-      <div class="field"><label>Voice</label><select id="set_voice" class="select"></select></div>
+      <div class="field"><label>Voice engine</label>
+        <select id="set_ttsengine" class="select">
+          <option value="kokoro">Kokoro — Fast &amp; clean (recommended)</option>
+          <option value="chatterbox">Chatterbox — Expressive, adds laughs &amp; sighs (slower)</option>
+        </select>
+        <div class="hint" id="set_ttsengineblurb"></div>
+      </div>
+      <div class="teststatus" id="set_ttsstatus"></div>
+      <div class="switchrow" id="set_emotionrow">
+        <div>
+          <div class="switchlabel">Expressive emotion</div>
+          <div class="switchsub">Let the voice add natural laughs and sighs when the moment fits. Chatterbox only.</div>
+        </div>
+        <button class="switch" id="set_emotion" role="switch" aria-checked="true"><span class="knob"></span></button>
+      </div>
+      <div class="field" id="set_voicerow"><label>Kokoro voice</label><select id="set_voice" class="select"></select></div>
       <div class="field">
         <label>Speed · <span class="speedval" id="set_speedval">1.0×</span></label>
         <input type="range" id="set_speed" class="slider" min="0.6" max="1.6" step="0.05" value="1.0">
@@ -1638,6 +1653,10 @@ async function loadSettings(){
   $("#set_name").value=s.assistant_name||"";
   $("#set_persona").value=s.persona||"";
   setSwitch($("#set_thinking"), !!s.thinking);
+  // voice engine + expressive emotion
+  $("#set_ttsengine").value=s.tts_engine||"kokoro";
+  setSwitch($("#set_emotion"), s.tts_emotion!==false);
+  updateTtsEngineUI();
   // voice + speed
   const sel=$("#set_voice");
   if(!sel.options.length){
@@ -1720,6 +1739,15 @@ function updateAsrBlurb(){
   const m=asrEntry();
   $("#set_asrblurb").textContent=m?m.blurb:"";
 }
+function updateTtsEngineUI(){
+  const chat=$("#set_ttsengine").value==="chatterbox";
+  $("#set_ttsengineblurb").textContent = chat
+    ? "Chatterbox uses one built-in voice and can perform inline laughs/sighs. First switch downloads it (~1 GB, up to a minute). Slower per reply than Kokoro."
+    : "Kokoro: many voices, very fast, neutral tone. No emotion performance.";
+  // The Kokoro voice picker only applies to Kokoro; emotion only to Chatterbox.
+  const vr=$("#set_voicerow"); vr.style.opacity=chat?"0.45":""; vr.style.pointerEvents=chat?"none":"";
+  const er=$("#set_emotionrow"); er.style.opacity=chat?"":"0.45"; er.style.pointerEvents=chat?"":"none";
+}
 async function previewVoice(){
   const st=$("#set_previewstatus"); st.className="teststatus"; st.textContent="Synthesizing…";
   const btn=$("#set_preview"); btn.disabled=true;
@@ -1747,6 +1775,8 @@ async function saveSettings(){
     assistant_name:$("#set_name").value.trim(),
     persona:$("#set_persona").value,
     thinking:$("#set_thinking").getAttribute("aria-checked")==="true",
+    tts_engine:$("#set_ttsengine").value,
+    tts_emotion:$("#set_emotion").getAttribute("aria-checked")==="true",
     tts_voice:$("#set_voice").value,
     tts_speed:parseFloat($("#set_speed").value),
     tts_chunking:$("#set_chunking").value,
@@ -1773,6 +1803,11 @@ async function saveSettings(){
   const asrChanged=asr && !(asr.model===_settingsCache.asr_model && asr.backend===_settingsCache.asr_backend);
   const ast=$("#set_asrstatus");
   if(asrChanged){ ast.className="teststatus"; ast.textContent="Loading "+asr.label.split(" — ")[0]+"… first use downloads the model, which can take a minute."; }
+  // did the voice engine change? Chatterbox is a ~1 GB first download.
+  const engChanged=body.tts_engine!==(_settingsCache.tts_engine||"kokoro");
+  const tst=$("#set_ttsstatus");
+  if(engChanged){ tst.className="teststatus"; tst.textContent = body.tts_engine==="chatterbox"
+    ? "Loading Chatterbox… first use downloads it (~1 GB), which can take a minute." : "Switching to Kokoro…"; }
   const btn=$("#settingsSave"); btn.disabled=true; btn.textContent="Saving…";
   let d={};
   try{ d=await (await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); }catch(_){}
@@ -1781,7 +1816,13 @@ async function saveSettings(){
     ast.textContent="Couldn’t load that model: "+d.asr_error+" — kept your previous one.";
     btn.disabled=false; btn.textContent="Save settings"; return;
   }
+  if(d && d.tts_error){
+    tst.className="teststatus err";
+    tst.textContent="Couldn’t load that voice engine: "+d.tts_error+" — kept your previous one.";
+    btn.disabled=false; btn.textContent="Save settings"; return;
+  }
   if(asrChanged){ ast.className="teststatus"; ast.textContent="Speech model ready ✓"; }
+  if(engChanged){ tst.className="teststatus"; tst.textContent="Voice engine ready ✓"; }
   btn.textContent="Saved ✓";
   setTimeout(()=>{ btn.disabled=false; btn.textContent="Save settings"; location.reload(); }, 700);
 }
@@ -2666,6 +2707,11 @@ $("#profileSave").addEventListener("click", saveProfile);
 $("#settingsSave").addEventListener("click", saveSettings);
 $("#modelsetupSave").addEventListener("click", saveModelSetup);
 $("#set_thinking").addEventListener("click", (e)=>{
+  const on=e.currentTarget.getAttribute("aria-checked")==="true";
+  setSwitch(e.currentTarget, !on);
+});
+$("#set_ttsengine").addEventListener("change", updateTtsEngineUI);
+$("#set_emotion").addEventListener("click",(e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
   setSwitch(e.currentTarget, !on);
 });

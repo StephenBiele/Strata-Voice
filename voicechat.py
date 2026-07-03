@@ -46,6 +46,10 @@ ASR_MODEL = os.environ.get("VOICE_ASR_MODEL", "mlx-community/parakeet-tdt-0.6b-v
 ASR_BACKEND = "mlx-audio"
 TTS_MODEL = os.environ.get("VOICE_TTS_MODEL", "prince-canuma/Kokoro-82M")
 TTS_VOICE = os.environ.get("VOICE_TTS_VOICE", "af_heart")
+# Expressive alternative engine. Chatterbox-Turbo keeps the paralinguistic tags
+# ([laugh]/[sigh]/…) but drops the exaggeration dial for speed; both engines emit
+# 24 kHz, so TTS_SR is shared. Selected per-conversation via the tts_engine setting.
+TTS_CHATTERBOX = os.environ.get("VOICE_TTS_CHATTERBOX", "mlx-community/chatterbox-turbo-fp16")
 DB_PATH = os.environ.get("VOICE_DB", str(Path.home() / ".vui" / "strata_memory.db"))
 # Local embedding model for semantic recall (Strata's vector layer). Falls back
 # to dump-all if this model isn't pulled, so the app never hard-depends on it.
@@ -172,6 +176,50 @@ def patch_kokoro_tts() -> None:
         print(f"[tts] could not patch Kokoro ({e}); long sentences may fail")
 
 
+# ---- Expressive (paralinguistic) tags ---------------------------------------
+# Chatterbox-Turbo performs these inline; every other engine (Kokoro) can't, so
+# they get stripped. Kept deliberately small — the events Turbo renders cleanly.
+EMOTION_TAGS = ("laugh", "chuckle", "sigh", "gasp", "cough", "sniffle", "groan", "yawn")
+_TAG_RE = re.compile(r"\[(" + "|".join(EMOTION_TAGS) + r")\]", re.IGNORECASE)
+_ANY_TAG_RE = re.compile(r"\[[a-zA-Z]{2,12}\]")   # also catch off-vocab guesses
+
+
+def strip_emotion_tags(text: str) -> str:
+    """Remove [laugh]/[sigh]/… tags and tidy the spacing they leave behind.
+    Used for engines that can't speak tags, and for anything stored (transcript,
+    memory) so a fact never contains '[laugh]'."""
+    text = _ANY_TAG_RE.sub("", text)
+    text = re.sub(r"\s+([,.!?;:])", r"\1", text)   # close the gap before punctuation
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+def fix_leading_tags(text: str) -> str:
+    """A tag at the very start of a synthesis chunk doesn't render (observed on
+    Chatterbox-Turbo — a front-of-line [sigh] is silent, mid-line works). Relocate
+    a leading tag to just after the first word so it performs. Degenerate chunks
+    that are only a tag are dropped."""
+    m = re.match(r"\s*(\[[a-zA-Z]{2,12}\])\s*(.*)", text, re.DOTALL)
+    if not m:
+        return text
+    tag, rest = m.group(1), m.group(2).strip()
+    if not rest:
+        return ""                                   # nothing but a tag → nothing to speak
+    parts = rest.split(" ", 1)
+    first, tail = parts[0], (parts[1] if len(parts) > 1 else "")
+    return f"{first} {tag} {tail}".strip() if tail else f"{first} {tag}"
+
+
+EMOTION_PROMPT = (
+    "EXPRESSIVE DELIVERY: your voice can perform a few inline cues. When it "
+    "genuinely fits the moment, you may drop ONE of these tags into a reply: "
+    + ", ".join(f"[{t}]" for t in EMOTION_TAGS) + ". Rules: use them sparingly "
+    "(most replies need none), never stack two, and NEVER start a sentence with a "
+    "tag — place it after the first word or between clauses (\"Oh [laugh] that's "
+    "great\", not \"[laugh] that's great\"). They are spoken performances, not "
+    "words, so only use the exact tags listed."
+)
+
+
 # ---- ASR ---------------------------------------------------------------------
 class _ASR:
     """Thin wrapper so call sites use `asr.transcribe(path).text` — mlx-audio's
@@ -208,7 +256,7 @@ def _now_context() -> str:
 
 def build_messages(history, memories, documents=None, profile=None,
                    persona: str | None = None, recent=None,
-                   forgotten=None) -> list[dict]:
+                   forgotten=None, emotion: bool = False) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
 
     `persona` is the user-editable part; the fixed MEMORY_DIRECTIVES are
@@ -243,6 +291,8 @@ def build_messages(history, memories, documents=None, profile=None,
         )
     system += "\n\n" + MEMORY_DIRECTIVES
     system += "\n\n" + RECALL_GUARD
+    if emotion:
+        system += "\n\n" + EMOTION_PROMPT
     return [{"role": "system", "content": system}, *history]
 
 

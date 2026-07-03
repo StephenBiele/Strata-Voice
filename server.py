@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import os
 import queue
 import re
@@ -68,6 +69,11 @@ DEFAULT_SETTINGS = {
     "configured": False,                 # model setup completed in onboarding
     "tts_voice": "af_heart",
     "tts_speed": 1.0,
+    # Voice engine: 'kokoro' (fast, neutral) or 'chatterbox' (expressive, performs
+    # inline [laugh]/[sigh] tags). tts_emotion lets the model emit those tags when
+    # it fits; only meaningful on chatterbox (kokoro strips them either way).
+    "tts_engine": "kokoro",              # 'kokoro' | 'chatterbox'
+    "tts_emotion": True,                 # allow inline expressive tags (chatterbox only)
     # voice cadence (experimental): how the spoken reply is chunked + smoothed
     "tts_chunking": "hybrid",            # 'sentence' | 'clause' | 'hybrid' | 'whole'
     "tts_trim": True,                    # trim edge silence from each chunk
@@ -102,7 +108,7 @@ DEFAULT_SETTINGS = {
 SETTINGS_FIELDS = (
     "assistant_name", "persona", "thinking", "backend",
     "ollama_url", "ollama_model", "openai_base", "openai_model", "configured",
-    "tts_voice", "tts_speed",
+    "tts_voice", "tts_speed", "tts_engine", "tts_emotion",
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
     "asr_model", "asr_backend", "mic_device", "memory_model",
@@ -178,6 +184,7 @@ _doc_vec_cache: dict = {}
 _asr = None
 _asr_key = None     # (model, backend) currently loaded into _asr, for change detection
 _tts = None
+_tts_engine = "kokoro"   # which engine is loaded into _tts, for change detection
 _strata = None
 _embedder = None    # real embedding model if available, else None (dump-all recall)
 _lock = threading.Lock()
@@ -322,10 +329,37 @@ def _mem_llm_cfg() -> dict:
     return cfg
 
 
-def _load_models() -> None:
-    global _asr, _asr_key, _tts, _strata, _embedder
-    print("Loading models (first run downloads them)…")
+def _load_tts(engine: str):
+    """Load a TTS engine and return (model, engine). 'chatterbox' loads the
+    expressive Turbo model; anything else loads Kokoro (+ its SineGen patch)."""
     from mlx_audio.tts.utils import load_model
+    if engine == "chatterbox":
+        # Turbo logs a per-call warning that it ignores CFG/exaggeration — quiet it.
+        logging.getLogger("mlx_audio.tts.models.chatterbox_turbo.chatterbox_turbo"
+                          ).setLevel(logging.ERROR)
+        return load_model(vc.TTS_CHATTERBOX), "chatterbox"
+    m = load_model(vc.TTS_MODEL)
+    vc.patch_kokoro_tts()
+    return m, "kokoro"
+
+
+def _reload_tts(engine: str):
+    """Swap the live voice engine. Returns None on success, else an error string.
+    Fail-safe like _reload_asr: the new engine must load before it replaces the
+    current one, so a bad pick can't brick a call."""
+    global _tts, _tts_engine
+    try:
+        new, eng = _load_tts(engine)
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    _tts, _tts_engine = new, eng
+    print(f"[tts] switched to {eng}")
+    return None
+
+
+def _load_models() -> None:
+    global _asr, _asr_key, _tts, _tts_engine, _strata, _embedder
+    print("Loading models (first run downloads them)…")
     from strata.gateway.api import Strata
 
     STORE.mkdir(parents=True, exist_ok=True)
@@ -341,8 +375,13 @@ def _load_models() -> None:
     except Exception as e:
         print(f"[asr] saved model {want} failed to load ({e}); using default")
         _asr = vc.load_asr(); _asr_key = (vc.ASR_MODEL, vc.ASR_BACKEND)
-    _tts = load_model(vc.TTS_MODEL)
-    vc.patch_kokoro_tts()
+    # Honor the saved voice engine; fall back to Kokoro if it can't load, so a bad
+    # saved pick never blocks startup.
+    try:
+        _tts, _tts_engine = _load_tts(s.get("tts_engine") or "kokoro")
+    except Exception as e:
+        print(f"[tts] saved engine failed to load ({e}); using Kokoro")
+        _tts, _tts_engine = _load_tts("kokoro")
     Path(vc.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     _embedder = vc.make_embedder()
     _strata = Strata.open(db_path=vc.DB_PATH, embedder=_embedder)
@@ -351,7 +390,7 @@ def _load_models() -> None:
         print(f"  · warmed vector index with {n} memor{'y' if n==1 else 'ies'}")
     _backfill_events()
     print(f"Ready · LLM={vc.LLM_MODEL} · ASR={_asr_label(_asr_key)} · "
-          f"TTS=Kokoro · DB={vc.DB_PATH}")
+          f"TTS={_tts_engine} · DB={vc.DB_PATH}")
 
 
 def _asr_label(key) -> str:
@@ -707,15 +746,27 @@ def _silence(ms: int) -> np.ndarray:
     return np.zeros(int(vc.TTS_SR * max(0, ms) / 1000), dtype=np.float32)
 
 
+def _emotion_active() -> bool:
+    """Inline expressive tags are only performed on chatterbox with the toggle on."""
+    return _tts_engine == "chatterbox" and bool(_settings().get("tts_emotion", True))
+
+
 def _synth_sentence(text: str, voice: str, speed: float, *,
                     trim: bool = True, smoothing: str = "natural") -> np.ndarray:
     """Synthesize one segment. Returns float32 @ TTS_SR (empty on failure)."""
     text = _for_speech(text, smoothing)
+    if _emotion_active():
+        text = vc.fix_leading_tags(text)     # keep tags, but not at the chunk's front
+    else:
+        text = vc.strip_emotion_tags(text)   # engine can't speak tags → drop them
     if not text:
         return np.zeros(0, dtype=np.float32)
     try:
-        segs = list(_tts.generate(text, voice=voice, speed=speed,
-                                  lang_code=_lang_code(voice)))
+        if _tts_engine == "chatterbox":
+            segs = list(_tts.generate(text, temperature=0.8))
+        else:
+            segs = list(_tts.generate(text, voice=voice, speed=speed,
+                                      lang_code=_lang_code(voice)))
         if segs:
             audio = np.concatenate([np.asarray(s.audio) for s in segs]).astype(np.float32)
             return _trim_silence(audio) if trim else audio
@@ -1059,7 +1110,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     messages = vc.build_messages(
         _history[-40:], mem_text,
         documents=_doc_context(text), profile=_profile_context(), persona=s["persona"],
-        recent=recent, forgotten=_forgotten,
+        recent=recent, forgotten=_forgotten, emotion=_emotion_active() and speak,
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
@@ -1130,7 +1181,9 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     # parse directives (incognito: apply_directives still strips them from the
     # spoken text, but nothing is written because private turns emit none and the
     # persistence/extraction below is skipped)
-    reply = vc.apply_directives(_strata, full, mem, forgotten=_forgotten)
+    # Strip any expressive tags from the stored/displayed reply — they're a spoken
+    # performance, so the transcript, memory, and caption stay clean prose.
+    reply = vc.strip_emotion_tags(vc.apply_directives(_strata, full, mem, forgotten=_forgotten))
     _history.append({"role": "assistant", "content": reply})   # ephemeral
 
     if not private:
@@ -1380,8 +1433,19 @@ class Handler(BaseHTTPRequestHandler):
                     if asr_error:
                         body.pop("asr_model", None)
                         body.pop("asr_backend", None)
+            # Voice-engine swap: same eager + fail-safe pattern. Chatterbox is a
+            # ~1 GB first download, so the first switch can take a bit.
+            tts_error = None
+            if "tts_engine" in body:
+                want_eng = body.get("tts_engine") or "kokoro"
+                if want_eng != _tts_engine:
+                    with _lock:
+                        tts_error = _reload_tts(want_eng)
+                    if tts_error:
+                        body.pop("tts_engine", None)
             _save_settings(body)
-            return self._json(200, {"ok": asr_error is None, "asr_error": asr_error})
+            return self._json(200, {"ok": asr_error is None and tts_error is None,
+                                    "asr_error": asr_error, "tts_error": tts_error})
         if u.path == "/tts/preview":
             body = json.loads(self._body() or b"{}")
             st = _settings()

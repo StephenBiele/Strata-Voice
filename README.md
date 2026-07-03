@@ -106,6 +106,12 @@ on disk. Full LLM controls (temperature, top-p, max tokens, context window), a l
 speech-recognition picker (Parakeet, Whisper, Qwen3-ASR), voice cadence tuning with
 A/B preview, and a background-work pill so memory processing is never invisible.
 
+**Expressive voice (optional)** — switch the voice engine to **Chatterbox-Turbo** in
+Settings and the assistant can perform natural laughs and sighs where they fit,
+inserted by the model itself from context. Kokoro stays the default: faster, many
+voices, neutral. Tags are a spoken performance only — they never appear in the
+transcript or your memories.
+
 **A living, responsive UI** — a calm call interface with an orb that breathes, ripples,
 and blooms; adapts from desktop to phone (panels slide, the conversation becomes a
 bottom sheet).
@@ -137,7 +143,7 @@ LLM's judgment — and incognito turns write nothing at all.
 | Role | Model | Runs on |
 | :--- | :--- | :--- |
 | Speech-to-text | Parakeet V3 TDT (0.6B) — swappable to Whisper / Qwen3-ASR in Settings | MLX, on-device |
-| Voice | Kokoro 82M | MLX, on-device |
+| Voice | Kokoro 82M — or Chatterbox-Turbo for expressive delivery, in Settings | MLX, on-device |
 | Hands-free VAD | Silero VAD | MLX, on-device |
 | Semantic recall | nomic-embed-text | Ollama, local |
 | Chat + memory | your pick — tiers above, or any model in Settings | Ollama / any OpenAI-compatible API |
@@ -200,6 +206,7 @@ Most things live in **Settings**. Startup options are env vars:
 | `VOICE_NAME` | `Sage` | initial assistant name |
 | `VOICE_LLM_MODEL` | `qwen3.5:4b` | default Ollama model (the installer seeds your tier's pick) |
 | `VOICE_ASR_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | ASR model id (or pick in Settings) |
+| `VOICE_TTS_CHATTERBOX` | `mlx-community/chatterbox-turbo-fp16` | expressive engine id (used when the voice engine is Chatterbox) |
 | `OLLAMA_URL` | `http://localhost:11434` | local Ollama endpoint |
 
 ## Uninstall
@@ -235,6 +242,7 @@ Built on [Strata Memory](https://github.com/StephenBiele/strata-memory),
 [mlx-audio](https://github.com/Blaizzy/mlx-audio) /
 [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) /
 [Parakeet](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3),
+[Chatterbox](https://github.com/resemble-ai/chatterbox) (Resemble AI),
 [Silero VAD](https://github.com/snakers4/silero-vad), and [Ollama](https://ollama.com).
 
 ## License
