@@ -767,6 +767,15 @@
   .teststatus{ font-size:.84rem; margin-top:.6rem; min-height:1.2em; }
   .teststatus.ok{ color:var(--sage-edge); }
   .teststatus.err{ color:var(--clay); }
+  /* a prominent "working on it" banner for slow switches (e.g. downloading a voice engine) */
+  .teststatus.busy{ display:flex; align-items:center; gap:.55rem; color:var(--ink);
+    background:oklch(0.66 0.10 133 / .12); border:1px solid oklch(0.66 0.10 133 / .28);
+    border-radius:.7rem; padding:.6rem .75rem; font-weight:500; }
+  .teststatus.busy::before{ content:""; width:1rem; height:1rem; flex:0 0 auto; border-radius:50%;
+    border:2px solid var(--sage-deep); border-top-color:transparent; animation:spin .7s linear infinite; }
+  @media (prefers-reduced-motion:reduce){ .teststatus.busy::before{ animation:none; } }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .teststatus.warn{ color:var(--clay); }
   .ghostbtn{
     appearance:none; cursor:pointer; font-family:inherit; font-size:.86rem; font-weight:600; color:var(--ink-soft);
     padding:.6em 1.1em; border-radius:999px; border:1px solid var(--line); background:oklch(0.99 0.01 120 / .6);
@@ -1759,6 +1768,16 @@ function updateTtsEngineUI(){
   $("#set_cbvoicerow").hidden = !chat;
   const er=$("#set_emotionrow"); er.style.opacity=chat?"":"0.45"; er.style.pointerEvents=chat?"":"none";
   if(chat) loadCbVoices();
+  // Heads-up: switching engines takes effect on Save, and the first switch to
+  // Chatterbox downloads ~1 GB. Warn before they wait on it.
+  const tst=$("#set_ttsstatus"); const saved=(_settingsCache&&_settingsCache.tts_engine)||"kokoro";
+  const val=$("#set_ttsengine").value;
+  if(val!==saved){
+    tst.className="teststatus warn";
+    tst.textContent = val==="chatterbox"
+      ? "Heads-up: when you Save, Chatterbox loads — the first time it downloads about 1 GB (up to a minute)."
+      : "Switches to Kokoro when you Save.";
+  } else { tst.className="teststatus"; tst.textContent=""; }
 }
 let _cbVoices=null;
 async function loadCbVoices(selectId){
@@ -1839,8 +1858,9 @@ async function saveSettings(){
   // did the voice engine change? Chatterbox is a ~1 GB first download.
   const engChanged=body.tts_engine!==(_settingsCache.tts_engine||"kokoro");
   const tst=$("#set_ttsstatus");
-  if(engChanged){ tst.className="teststatus"; tst.textContent = body.tts_engine==="chatterbox"
-    ? "Loading Chatterbox… first use downloads it (~1 GB), which can take a minute." : "Switching to Kokoro…"; }
+  if(engChanged){ tst.className="teststatus busy"; tst.textContent = body.tts_engine==="chatterbox"
+    ? "Downloading & loading Chatterbox… first time only (~1 GB). This can take a minute — keep this tab open."
+    : "Switching to Kokoro…"; }
   const btn=$("#settingsSave"); btn.disabled=true; btn.textContent="Saving…";
   let d={};
   try{ d=await (await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); }catch(_){}
@@ -1855,7 +1875,7 @@ async function saveSettings(){
     btn.disabled=false; btn.textContent="Save settings"; return;
   }
   if(asrChanged){ ast.className="teststatus"; ast.textContent="Speech model ready ✓"; }
-  if(engChanged){ tst.className="teststatus"; tst.textContent="Voice engine ready ✓"; }
+  if(engChanged){ tst.className="teststatus ok"; tst.textContent="Voice engine ready ✓"; }
   btn.textContent="Saved ✓";
   setTimeout(()=>{ btn.disabled=false; btn.textContent="Save settings"; location.reload(); }, 700);
 }

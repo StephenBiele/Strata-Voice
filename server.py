@@ -1451,6 +1451,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        # The UI is a single file that changes with every update; never let a
+        # browser serve a stale copy (that hides new Settings like the voice picker).
+        if ctype.startswith("text/html"):
+            self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(data)
 
