@@ -1022,6 +1022,16 @@
         <button class="switch" id="set_emotion" role="switch" aria-checked="true"><span class="knob"></span></button>
       </div>
       <div class="field" id="set_voicerow"><label>Kokoro voice</label><select id="set_voice" class="select"></select></div>
+      <div class="field" id="set_cbvoicerow" hidden>
+        <label>Voice
+          <button class="linkbtn" id="set_cbvoice_add">+ add your own</button>
+          <button class="linkbtn" id="set_cbvoice_del" hidden>remove</button>
+        </label>
+        <select id="set_cbvoice" class="select"></select>
+        <div class="hint" id="set_cbvoice_note"></div>
+        <input type="file" id="set_cbvoice_file" accept="audio/*" style="display:none">
+        <div class="teststatus" id="set_cbvoice_status"></div>
+      </div>
       <div class="field">
         <label>Speed · <span class="speedval" id="set_speedval">1.0×</span></label>
         <input type="range" id="set_speed" class="slider" min="0.6" max="1.6" step="0.05" value="1.0">
@@ -1742,11 +1752,32 @@ function updateAsrBlurb(){
 function updateTtsEngineUI(){
   const chat=$("#set_ttsengine").value==="chatterbox";
   $("#set_ttsengineblurb").textContent = chat
-    ? "Chatterbox uses one built-in voice and can perform inline laughs/sighs. First switch downloads it (~1 GB, up to a minute). Slower per reply than Kokoro."
+    ? "Chatterbox can perform inline laughs/sighs and clone a voice from a clip. First switch downloads it (~1 GB, up to a minute). Slower per reply than Kokoro."
     : "Kokoro: many voices, very fast, neutral tone. No emotion performance.";
-  // The Kokoro voice picker only applies to Kokoro; emotion only to Chatterbox.
-  const vr=$("#set_voicerow"); vr.style.opacity=chat?"0.45":""; vr.style.pointerEvents=chat?"none":"";
+  // Kokoro shows its voice packs; Chatterbox shows its cloned-voice picker.
+  $("#set_voicerow").hidden = chat;
+  $("#set_cbvoicerow").hidden = !chat;
   const er=$("#set_emotionrow"); er.style.opacity=chat?"":"0.45"; er.style.pointerEvents=chat?"":"none";
+  if(chat) loadCbVoices();
+}
+let _cbVoices=null;
+async function loadCbVoices(selectId){
+  const sel=$("#set_cbvoice");
+  let cur = selectId || (_settingsCache&&_settingsCache.tts_cb_voice) || "builtin";
+  try{
+    const d=await (await fetch("/tts/voices")).json();
+    _cbVoices=d.voices||[];
+    if(selectId===undefined && d.current) cur=d.current;
+  }catch(_){ _cbVoices=[{id:"builtin",label:"Built-in",kind:"builtin",note:""}]; }
+  sel.innerHTML=_cbVoices.map(v=>`<option value="${v.id}">${v.label}${v.kind==="custom"?" (yours)":""}</option>`).join("");
+  sel.value = _cbVoices.some(v=>v.id===cur) ? cur : "builtin";
+  updateCbVoiceMeta();
+}
+function cbVoiceEntry(){ return (_cbVoices||[]).find(v=>v.id===$("#set_cbvoice").value); }
+function updateCbVoiceMeta(){
+  const v=cbVoiceEntry();
+  $("#set_cbvoice_note").textContent = v ? (v.note||"") : "";
+  $("#set_cbvoice_del").hidden = !(v && v.kind==="custom");
 }
 async function previewVoice(){
   const st=$("#set_previewstatus"); st.className="teststatus"; st.textContent="Synthesizing…";
@@ -1755,6 +1786,7 @@ async function previewVoice(){
     const body={voice:$("#set_voice").value, speed:parseFloat($("#set_speed").value),
       chunking:$("#set_chunking").value, trim:$("#set_trim").getAttribute("aria-checked")==="true",
       gap_ms:parseInt($("#set_gap").value,10), smoothing:$("#set_smoothing").value,
+      cb_voice:$("#set_cbvoice").value||"builtin",   // audition the (maybe unsaved) Chatterbox voice
       text:$("#set_previewtext").value.trim()};   // blank -> server uses default sample
     const d=await (await fetch("/tts/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
     if(!d.ok||!d.audio){ st.className="teststatus err"; st.textContent="Couldn’t synthesize."; }
@@ -1777,6 +1809,7 @@ async function saveSettings(){
     thinking:$("#set_thinking").getAttribute("aria-checked")==="true",
     tts_engine:$("#set_ttsengine").value,
     tts_emotion:$("#set_emotion").getAttribute("aria-checked")==="true",
+    tts_cb_voice:$("#set_cbvoice").value||"builtin",
     tts_voice:$("#set_voice").value,
     tts_speed:parseFloat($("#set_speed").value),
     tts_chunking:$("#set_chunking").value,
@@ -2714,6 +2747,30 @@ $("#set_ttsengine").addEventListener("change", updateTtsEngineUI);
 $("#set_emotion").addEventListener("click",(e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
   setSwitch(e.currentTarget, !on);
+});
+$("#set_cbvoice").addEventListener("change", updateCbVoiceMeta);
+$("#set_cbvoice_add").addEventListener("click",(e)=>{ e.preventDefault(); $("#set_cbvoice_file").click(); });
+$("#set_cbvoice_file").addEventListener("change", async (e)=>{
+  const f=e.target.files&&e.target.files[0]; if(!f) return;
+  const st=$("#set_cbvoice_status"); st.className="teststatus"; st.textContent="Adding voice…";
+  const name=(prompt("Name this voice:", f.name.replace(/\.[^.]+$/,""))||"").trim();
+  if(!name){ st.textContent=""; e.target.value=""; return; }
+  try{
+    const d=await (await fetch("/tts/voice/upload",{method:"POST",
+      headers:{"X-Voice-Name":encodeURIComponent(name),"Content-Type":"application/octet-stream"},
+      body:f})).json();
+    if(!d.ok){ st.className="teststatus err"; st.textContent=d.error||"Couldn’t add that clip."; }
+    else{ st.textContent="Voice added ✓ — Save to use it."; await loadCbVoices(d.voice.id); }
+  }catch(_){ st.className="teststatus err"; st.textContent="Upload failed."; }
+  e.target.value="";
+});
+$("#set_cbvoice_del").addEventListener("click", async (e)=>{
+  e.preventDefault();
+  const v=cbVoiceEntry(); if(!v||v.kind!=="custom") return;
+  if(!confirm("Remove the voice “"+v.label+"”?")) return;
+  try{ await fetch("/tts/voice/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:v.id})}); }catch(_){}
+  await loadCbVoices("builtin");
+  $("#set_cbvoice_status").textContent="";
 });
 $("#set_resetPrompt").addEventListener("click",(e)=>{
   e.preventDefault();

@@ -108,9 +108,11 @@ A/B preview, and a background-work pill so memory processing is never invisible.
 
 **Expressive voice (optional)** — switch the voice engine to **Chatterbox-Turbo** in
 Settings and the assistant can perform natural laughs and sighs where they fit,
-inserted by the model itself from context. Kokoro stays the default: faster, many
-voices, neutral. Tags are a spoken performance only — they never appear in the
-transcript or your memories.
+inserted by the model itself from context. It also brings **ten preset voices**
+(real public-domain human recordings, CC0) and **voice cloning** — drop in a short
+audio clip and it speaks in that voice. Kokoro stays the default: faster, many
+voices, neutral. Emotion tags are a spoken performance only — they never appear in
+the transcript or your memories.
 
 **A living, responsive UI** — a calm call interface with an orb that breathes, ripples,
 and blooms; adapts from desktop to phone (panels slide, the conversation becomes a

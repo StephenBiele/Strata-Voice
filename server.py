@@ -52,6 +52,12 @@ DOCS_FILE = STORE / "documents.json"
 PROFILE_FILE = STORE / "profile.json"
 PROFILE_FIELDS = ("name", "preferred_name", "location", "gender")
 SETTINGS_FILE = STORE / "settings.json"
+# Chatterbox voices are reference clips: bundled presets ship in the repo; the
+# user's own cloned voices live outside the repo with their data. A voice is just
+# a short audio file the engine mimics.
+PRESET_VOICES_DIR = HERE / "voices"
+CUSTOM_VOICES_DIR = STORE / "voices"
+VOICE_AUDIO_EXTS = (".wav", ".flac", ".mp3", ".ogg", ".m4a")
 
 # API keys are NEVER written to disk — they live in the OS keychain.
 KEYRING_SERVICE = "voicechat"
@@ -74,6 +80,7 @@ DEFAULT_SETTINGS = {
     # it fits; only meaningful on chatterbox (kokoro strips them either way).
     "tts_engine": "kokoro",              # 'kokoro' | 'chatterbox'
     "tts_emotion": True,                 # allow inline expressive tags (chatterbox only)
+    "tts_cb_voice": "builtin",           # chatterbox voice id: builtin | preset:x | custom:x
     # voice cadence (experimental): how the spoken reply is chunked + smoothed
     "tts_chunking": "hybrid",            # 'sentence' | 'clause' | 'hybrid' | 'whole'
     "tts_trim": True,                    # trim edge silence from each chunk
@@ -108,7 +115,7 @@ DEFAULT_SETTINGS = {
 SETTINGS_FIELDS = (
     "assistant_name", "persona", "thinking", "backend",
     "ollama_url", "ollama_model", "openai_base", "openai_model", "configured",
-    "tts_voice", "tts_speed", "tts_engine", "tts_emotion",
+    "tts_voice", "tts_speed", "tts_engine", "tts_emotion", "tts_cb_voice",
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
     "asr_model", "asr_backend", "mic_device", "memory_model",
@@ -337,7 +344,11 @@ def _load_tts(engine: str):
         # Turbo logs a per-call warning that it ignores CFG/exaggeration — quiet it.
         logging.getLogger("mlx_audio.tts.models.chatterbox_turbo.chatterbox_turbo"
                           ).setLevel(logging.ERROR)
-        return load_model(vc.TTS_CHATTERBOX), "chatterbox"
+        m = load_model(vc.TTS_CHATTERBOX)
+        global _cb_builtin_conds, _cb_active_voice, _cb_conds_cache
+        _cb_builtin_conds = getattr(m, "_conds", None)   # snapshot the default voice
+        _cb_active_voice, _cb_conds_cache = "builtin", {}
+        return m, "chatterbox"
     m = load_model(vc.TTS_MODEL)
     vc.patch_kokoro_tts()
     return m, "kokoro"
@@ -355,6 +366,143 @@ def _reload_tts(engine: str):
     _tts, _tts_engine = new, eng
     print(f"[tts] switched to {eng}")
     return None
+
+
+# ---- Chatterbox voices (reference-clip cloning) ------------------------------
+# Chatterbox has one built-in voice; every other voice is cloned from a short
+# reference clip. Presets ship in PRESET_VOICES_DIR (with a manifest for friendly
+# labels + CC0 attribution); the user's uploaded/cloned voices go in
+# CUSTOM_VOICES_DIR. Deriving a voice ("conditionals") costs ~0.5s, so we cache
+# by path and only switch when the selection changes — synthesis then runs at
+# full speed.
+_cb_builtin_conds = None    # the model's own built-in conditionals, to restore
+_cb_active_voice = "builtin"   # which voice is currently prepared into _tts
+_cb_conds_cache: dict = {}     # abs path -> prepared conditionals object
+
+
+def _voice_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    return slug or "voice"
+
+
+def _cb_voice_path(voice_id: str):
+    """Resolve a voice id ('preset:foo' / 'custom:bar') to its clip path, or None
+    for the built-in voice / unknown id."""
+    if not voice_id or voice_id == "builtin":
+        return None
+    kind, _, name = voice_id.partition(":")
+    d = PRESET_VOICES_DIR if kind == "preset" else CUSTOM_VOICES_DIR
+    for ext in VOICE_AUDIO_EXTS:
+        p = d / f"{name}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _cb_voice_catalog() -> list[dict]:
+    """All selectable Chatterbox voices: built-in, bundled presets, user uploads."""
+    out = [{"id": "builtin", "label": "Built-in", "kind": "builtin", "note": "Chatterbox's default voice."}]
+    man = _read_json(PRESET_VOICES_DIR / "manifest.json", {}) if PRESET_VOICES_DIR.exists() else {}
+    seen = set()
+    presets = []
+    if PRESET_VOICES_DIR.exists():
+        for p in sorted(PRESET_VOICES_DIR.iterdir()):
+            if p.suffix.lower() not in VOICE_AUDIO_EXTS or p.stem in seen:
+                continue
+            seen.add(p.stem)
+            meta = man.get(p.name, man.get(p.stem, {}))
+            presets.append((meta.get("order", 999), {
+                "id": "preset:" + p.stem, "kind": "preset",
+                "label": meta.get("label", p.stem.replace("_", " ").title()),
+                "note": meta.get("note", ""), "source": meta.get("source", "")}))
+    out += [v for _, v in sorted(presets, key=lambda x: x[0])]   # manifest order
+    if CUSTOM_VOICES_DIR.exists():
+        for p in sorted(CUSTOM_VOICES_DIR.iterdir()):
+            if p.suffix.lower() not in VOICE_AUDIO_EXTS:
+                continue
+            out.append({"id": "custom:" + p.stem, "kind": "custom",
+                        "label": p.stem.replace("_", " ").title(), "note": "Your voice."})
+    return out
+
+
+def _cb_select_voice(voice_id: str) -> None:
+    """Make `voice_id` the active Chatterbox voice (prepare/restore its
+    conditionals). Cheap when already active or cached. No-op off chatterbox."""
+    global _cb_active_voice
+    if _tts_engine != "chatterbox" or _tts is None:
+        return
+    if voice_id == _cb_active_voice:
+        return
+    path = _cb_voice_path(voice_id)
+    if path is None:                       # built-in / missing → restore default
+        if _cb_builtin_conds is not None:
+            _tts._conds = _cb_builtin_conds
+        _cb_active_voice = "builtin"
+        return
+    key = str(path)
+    cached = _cb_conds_cache.get(key)
+    if cached is not None:
+        _tts._conds = cached
+    else:
+        try:
+            _tts.prepare_conditionals(key)   # derives + sets _tts._conds
+            _cb_conds_cache[key] = _tts._conds
+        except Exception as e:
+            print(f"[tts] voice clone failed for {voice_id} ({e}); using built-in")
+            if _cb_builtin_conds is not None:
+                _tts._conds = _cb_builtin_conds
+            _cb_active_voice = "builtin"
+            return
+    _cb_active_voice = voice_id
+
+
+def _ingest_voice_clip(raw: bytes, name: str) -> dict:
+    """Save an uploaded reference clip as a custom voice: normalize to mono 24 kHz
+    WAV, capped at 20s (ffmpeg, already a prerequisite). Returns the catalog entry;
+    raises on unreadable audio or a clip too short to clone from."""
+    import subprocess
+    import tempfile
+    CUSTOM_VOICES_DIR.mkdir(parents=True, exist_ok=True)
+    slug = _voice_slug(name)
+    dest = CUSTOM_VOICES_DIR / f"{slug}.wav"
+    i = 2
+    while dest.exists():                       # never clobber an existing voice
+        dest = CUSTOM_VOICES_DIR / f"{slug}_{i}.wav"
+        i += 1
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
+        tf.write(raw)
+        tmp = Path(tf.name)
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", str(tmp), "-ac", "1", "-ar", str(vc.TTS_SR),
+                        "-t", "20", str(dest)], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        raise ValueError(f"couldn't read that audio file ({e})")
+    finally:
+        tmp.unlink(missing_ok=True)
+    if not dest.exists() or sf.info(str(dest)).frames / vc.TTS_SR < 3.0:
+        dest.unlink(missing_ok=True)
+        raise ValueError("clip too short — use at least 5 seconds of clear speech")
+    return {"id": "custom:" + dest.stem, "kind": "custom",
+            "label": dest.stem.replace("_", " ").title(), "note": "Your voice."}
+
+
+def _cb_delete_custom(voice_id: str) -> bool:
+    """Delete a custom (uploaded) voice; fall back to built-in if it was active."""
+    global _cb_active_voice
+    if not voice_id.startswith("custom:"):
+        return False
+    path = _cb_voice_path(voice_id)
+    if path is None:
+        return False
+    _cb_conds_cache.pop(str(path), None)
+    if _cb_active_voice == voice_id:
+        if _cb_builtin_conds is not None and _tts is not None:
+            _tts._conds = _cb_builtin_conds
+        _cb_active_voice = "builtin"
+    path.unlink(missing_ok=True)
+    return True
 
 
 def _load_models() -> None:
@@ -1097,6 +1245,8 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None, mems=mem)
     recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
     voice, speed = s["tts_voice"], float(s["tts_speed"])
+    if speak and _tts_engine == "chatterbox":
+        _cb_select_voice(s.get("tts_cb_voice") or "builtin")   # one-time per voice
     # cadence settings: how the spoken reply is chunked + smoothed
     chunking = s["tts_chunking"]
     trim, smoothing, gap_ms = bool(s["tts_trim"]), s["tts_smoothing"], int(s["tts_gap_ms"])
@@ -1334,6 +1484,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, out)
         if u.path == "/voices":
             return self._json(200, {"voices": _voice_list()})
+        if u.path == "/tts/voices":
+            return self._json(200, {"voices": _cb_voice_catalog(),
+                                    "current": _settings().get("tts_cb_voice") or "builtin"})
         if u.path == "/asr/models":
             cur = _asr_key or (_settings()["asr_model"], _settings()["asr_backend"])
             return self._json(200, {"models": ASR_MODELS,
@@ -1460,6 +1613,8 @@ class Handler(BaseHTTPRequestHandler):
             sample = body.get("text") or ("Here's how I sound. I can pause between "
                 "thoughts, breathe a little, and keep the rhythm natural.")
             with _lock:
+                if _tts_engine == "chatterbox":   # audition the (maybe unsaved) pick
+                    _cb_select_voice(body.get("cb_voice") or st.get("tts_cb_voice") or "builtin")
                 audio = _synth_reply(sample, chunking=chunking, trim=trim, gap_ms=gap_ms,
                                      smoothing=smoothing, voice=voice, speed=speed)
             if audio.size == 0:
@@ -1468,6 +1623,24 @@ class Handler(BaseHTTPRequestHandler):
             sf.write(buf, audio, vc.TTS_SR, format="WAV", subtype="PCM_16")
             return self._json(200, {"ok": True,
                                     "audio": base64.b64encode(buf.getvalue()).decode("ascii")})
+        if u.path == "/tts/voice/upload":
+            # raw audio bytes in the body; desired name in a header (any format
+            # ffmpeg reads). Saved as a custom Chatterbox voice.
+            raw = self._body()
+            if not raw:
+                return self._json(200, {"ok": False, "error": "no audio received"})
+            name = unquote(self.headers.get("X-Voice-Name", "") or "My voice")
+            try:
+                with _lock:
+                    entry = _ingest_voice_clip(raw, name)
+            except Exception as e:
+                return self._json(200, {"ok": False, "error": str(e)})
+            return self._json(200, {"ok": True, "voice": entry})
+        if u.path == "/tts/voice/delete":
+            body = json.loads(self._body() or b"{}")
+            with _lock:
+                ok = _cb_delete_custom(body.get("id", ""))
+            return self._json(200, {"ok": ok})
         if u.path == "/settings/test":
             body = json.loads(self._body() or b"{}")
             try:

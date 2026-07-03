@@ -1,0 +1,12 @@
+{
+  "cori_samuel.flac":      {"order": 1,  "label": "Clara",   "note": "female · bright, clear",          "source": "LibriVox reader Cori Samuel — public domain / CC0, via the Voice-Zero set"},
+  "amy_koenig.flac":       {"order": 2,  "label": "Amy",     "note": "female · warm",                   "source": "LibriVox reader Amy Koenig — public domain / CC0, via the Voice-Zero set"},
+  "a_janelle_risa.flac":   {"order": 3,  "label": "Janelle", "note": "female · soft",                   "source": "LibriVox reader Janelle Risa — public domain / CC0, via the Voice-Zero set"},
+  "anna_simon.flac":       {"order": 4,  "label": "Anna",    "note": "female · measured",               "source": "LibriVox reader Anna Simon — public domain / CC0, via the Voice-Zero set"},
+  "elli.flac":             {"order": 5,  "label": "Ellie",   "note": "female · youthful, inquisitive",  "source": "LibriVox reader Elli — public domain / CC0, via the Voice-Zero set"},
+  "alan_davis_drake.flac": {"order": 6,  "label": "Marcus",  "note": "male · deep, steady",             "source": "LibriVox reader Alan Davis Drake — public domain / CC0, via the Voice-Zero set"},
+  "dan_mason.flac":        {"order": 7,  "label": "Dan",     "note": "male · warm",                     "source": "LibriVox reader Dan Mason — public domain / CC0, via the Voice-Zero set"},
+  "david_clark.flac":      {"order": 8,  "label": "David",   "note": "male · crisp",                    "source": "LibriVox reader David Clark — public domain / CC0, via the Voice-Zero set"},
+  "alec_daitsman.flac":    {"order": 9,  "label": "Alec",    "note": "male · relaxed, speaker",         "source": "LibriVox reader Alec Daitsman — public domain / CC0, via the Voice-Zero set"},
+  "clayton_j_smith.flac":  {"order": 10, "label": "Clayton", "note": "male · resonant, energetic",      "source": "LibriVox reader Clayton J. Smith — public domain / CC0, via the Voice-Zero set"}
+}
