@@ -2425,6 +2425,9 @@ function setMuted(on){
     if(!holding) releaseMic();         // OS mic light off
     if(state==="listening") setState("idle"); else if(state==="idle") setState("idle");
   }else{
+    // unmute = turn voice on. If voice was never armed (entered via text mode),
+    // arm it now; if it was armed and just mic-muted, re-open the mic.
+    if(started && !handsFree){ armHandsFree(); return; }   // armHandsFree owns the status
     if(handsFree && started && !micStream) acquireMic();
     setState(state);                   // repaint the hint
   }
