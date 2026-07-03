@@ -210,10 +210,26 @@ _forgotten: list[str] = []     # keywords deleted THIS session — the model is 
 
 
 # ---- persistence -------------------------------------------------------------
+# Parsed-JSON cache keyed by (path, mtime): settings/profile/documents are read
+# on every turn but change rarely. SESSIONS_FILE is deliberately NOT cached — it
+# is mutated concurrently (turns + recap threads), and handing all readers a
+# shared parsed object would create serialize-during-mutation races that the
+# read-fresh-from-disk pattern avoids.
+_json_cache: dict = {}
+
+
 def _read_json(path: Path, default):
     if not path.exists():
         return default
     try:
+        if path != SESSIONS_FILE:
+            mtime = path.stat().st_mtime_ns
+            hit = _json_cache.get(path)
+            if hit and hit[0] == mtime:
+                return hit[1]
+            obj = json.loads(path.read_text())
+            _json_cache[path] = (mtime, obj)
+            return obj
         return json.loads(path.read_text())
     except Exception:
         return default
@@ -222,6 +238,7 @@ def _read_json(path: Path, default):
 def _write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2))
+    _json_cache.pop(path, None)
 
 
 # ---- settings + secure API key ----------------------------------------------
@@ -1026,7 +1043,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
 
     s = _settings()
     mem = vc.list_memories(_strata)
-    mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None)
+    mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None, mems=mem)
     recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
     voice, speed = s["tts_voice"], float(s["tts_speed"])
     # cadence settings: how the spoken reply is chunked + smoothed
@@ -1036,8 +1053,11 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     clause = chunking == "clause"
     stream_chunks = chunking in ("sentence", "clause", "hybrid")  # 'whole' waits for the end
     first_only = chunking == "hybrid"   # hybrid streams only the first sentence early
+    # Long calls: inject only the recent tail of the conversation. The full
+    # transcript lives in the session; older context is covered by memories +
+    # recaps, and an unbounded history makes every turn's prefill slower.
     messages = vc.build_messages(
-        _history, mem_text,
+        _history[-40:], mem_text,
         documents=_doc_context(text), profile=_profile_context(), persona=s["persona"],
         recent=recent, forgotten=_forgotten,
     )
@@ -1138,7 +1158,10 @@ def _handle_turn_stream(wav_bytes: bytes, private: bool = False):
     with _lock:
         tmp = HERE / ".turn_in.wav"
         tmp.write_bytes(wav_bytes)
-        text = _asr.transcribe(str(tmp)).text.strip()
+        try:
+            text = _asr.transcribe(str(tmp)).text.strip()
+        finally:
+            tmp.unlink(missing_ok=True)
         if not text:
             yield {"type": "empty"}
             return
