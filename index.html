@@ -1026,7 +1026,7 @@
       <div class="switchrow" id="set_emotionrow">
         <div>
           <div class="switchlabel">Expressive emotion</div>
-          <div class="switchsub">Let the voice add natural laughs and sighs when the moment fits. Chatterbox only.</div>
+          <div class="switchsub">Let the voice perform natural touches when the moment fits — laughs, chuckles, sighs, gasps, groans, yawns. Chatterbox only.</div>
         </div>
         <button class="switch" id="set_emotion" role="switch" aria-checked="true"><span class="knob"></span></button>
       </div>
@@ -1263,7 +1263,7 @@ let ac, micStream, micSource, micAnalyser, capNode, micToken=0;
 let playAnalyser=null;
 let busy=false, started=false;
 let state="idle";         // idle | listening | thinking | speaking
-let lastMemCount=null, callStart=0, timerInt=null;
+let lastMemCount=null, callStart=0, timerInt=null, timerPausedAt=null;
 let pfOnboarding=false;
 let drawerInChat=false;   // true while the drawer is showing one conversation (not the list)
 let drawerChatId=null;    // id of the conversation open in the drawer
@@ -1380,6 +1380,18 @@ function setHistoryCollapsed(collapsed){
   if(!collapsed) showDrawerView(drawerView);
   dockComposer();
 }
+/* Open the sidebar directly on the live conversation, awaiting the load so a
+   caller can append to the drawer right after without being wiped by the fetch.
+   (setHistoryCollapsed fires an unawaited load — racy for that use.) */
+async function revealCurrentConversation(){
+  drawerView="current";
+  $("#segCurrent").classList.add("active");    $("#segCurrent").setAttribute("aria-selected","true");
+  $("#segHistory").classList.remove("active"); $("#segHistory").setAttribute("aria-selected","false");
+  call.classList.remove("history-collapsed");
+  historyToggle.setAttribute("aria-expanded","true");
+  historyToggle.title="Hide conversation";
+  await openDrawerCurrent();   // also docks the composer into the sidebar
+}
 /* switch the sidebar between the live current conversation and past-chat history */
 function showDrawerView(view){
   drawerView = view;
@@ -1455,7 +1467,7 @@ async function start(textMode=false){
   // entry keeps it closed (the orb carries the state)
   setHistoryCollapsed(!textMode);
   showView("call");
-  muted=false;   // reset before the mode decision below
+  muted=false; timerPausedAt=null;   // reset before the mode decision below
   callStart=Date.now(); timerInt=setInterval(tickTimer,1000); tickTimer();
   setState("idle"); levelLoop();
   // pull the VAD tuning either way (used the moment voice is enabled)
@@ -1482,6 +1494,7 @@ async function start(textMode=false){
   }
 }
 function tickTimer(){
+  if(timerPausedAt!=null) return;   // muted = conversation paused; freeze the clock
   const s=Math.floor((Date.now()-callStart)/1000);
   timerEl.textContent=`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
 }
@@ -2223,8 +2236,15 @@ async function sendCallChat(){
   if(!text || busy) return;
   inp.value=""; busy=true;
   stopPlayback(); setState("thinking"); showCaption(text, "user");
-  lastUserText=text; drawerAppendUserPending(text);   // live-update the open conversation
   const speak=!muted;   // quiet/text mode → text reply; voice mode → spoken
+  // Muted = the reply can only arrive as text, so make sure it's visible: open
+  // the conversation panel (awaited BEFORE the pending bubble so the load can't
+  // wipe it). Unmuted keeps the reply in voice, panel untouched.
+  if(!speak && (call.classList.contains("history-collapsed") || drawerView!=="current")){
+    await revealCurrentConversation();
+    setTimeout(()=>inp.focus(), 60);   // composer just moved into the sidebar — keep typing
+  }
+  lastUserText=text; drawerAppendUserPending(text);   // live-update the open conversation
   let gotAudio=false, acc="";
   await streamChat(text, {
     speak,
@@ -2528,8 +2548,13 @@ function setMuted(on){
     // Close the audio context so Safari actually hands the mic back to the OS /
     // other apps (Discord). Any in-progress spoken reply stops with it.
     teardownAudioContext();
+    if(started && timerPausedAt==null) timerPausedAt=Date.now();   // muted = paused → freeze the call clock
     setState("idle");
   }else{
+    if(started && timerPausedAt!=null){   // resume the clock where it left off
+      callStart += Date.now()-timerPausedAt;
+      timerPausedAt=null; tickTimer();
+    }
     // unmute = turn voice on. Rebuild the audio context first (it was closed on
     // mute), then arm voice if it was never armed, or re-open the mic if it was.
     if(started){

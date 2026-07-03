@@ -210,13 +210,17 @@ def fix_leading_tags(text: str) -> str:
 
 
 EMOTION_PROMPT = (
-    "EXPRESSIVE DELIVERY: your voice can perform a few inline cues. When it "
-    "genuinely fits the moment, you may drop ONE of these tags into a reply: "
-    + ", ".join(f"[{t}]" for t in EMOTION_TAGS) + ". Rules: use them sparingly "
-    "(most replies need none), never stack two, and NEVER start a sentence with a "
-    "tag — place it after the first word or between clauses (\"Oh [laugh] that's "
-    "great\", not \"[laugh] that's great\"). They are spoken performances, not "
-    "words, so only use the exact tags listed."
+    "EXPRESSIVE DELIVERY: your voice can perform inline cues. When one genuinely "
+    "fits the moment, drop it into the reply — use the whole palette, not just "
+    "laughs: [laugh] for something truly funny, [chuckle] for light amusement or "
+    "warmth, [sigh] for sympathy, reluctance, or relief, [gasp] for surprise or "
+    "big news, [groan] for playful exasperation, [yawn] for sleepy or late-night "
+    "moments, [cough]/[sniffle] almost never. Rules: at most one per reply and "
+    "most replies need none — an unearned cue feels fake; match the user's mood, "
+    "never perform excitement at bad news. NEVER start a sentence with a tag — "
+    "place it after the first word or between clauses (\"Oh [laugh] that's "
+    "great\", not \"[laugh] that's great\"). Tags are spoken performances, not "
+    "words; only the exact tags listed work."
 )
 
 

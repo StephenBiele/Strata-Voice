@@ -1249,6 +1249,12 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         _cb_select_voice(s.get("tts_cb_voice") or "builtin")   # one-time per voice
     # cadence settings: how the spoken reply is chunked + smoothed
     chunking = s["tts_chunking"]
+    # Hybrid batches everything after sentence 1 into one big tail chunk. Kokoro
+    # synthesizes ~10x real-time so that tail is ready instantly; Chatterbox runs
+    # ~0.6x real-time, so the tail lands seconds after sentence 1 finishes — an
+    # audible dead-air gap. Sentence streaming keeps synthesis ahead of playback.
+    if _tts_engine == "chatterbox" and chunking == "hybrid":
+        chunking = "sentence"
     trim, smoothing, gap_ms = bool(s["tts_trim"]), s["tts_smoothing"], int(s["tts_gap_ms"])
     gap = _silence(gap_ms)
     clause = chunking == "clause"
