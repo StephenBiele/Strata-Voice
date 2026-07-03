@@ -100,10 +100,13 @@ information. Never claim you don't know them, can't remember, or might be \
 misremembering something that is listed above — it is correct, so do not deny, \
 hedge, or downplay it. Weave it in naturally instead of reciting a list."""
 
-# Backwards-compatible default (persona + directives) for the CLI path.
-SYSTEM_PROMPT = PERSONA_PROMPT + "\n\n" + MEMORY_DIRECTIVES + "\n\n" + RECALL_GUARD
-
 _THINK_TAG = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+# One pooled HTTP client for every LLM/embedding call. A fresh httpx.Client per
+# call re-did TCP (and TLS for remote APIs) each time — 10s of ms per call, on
+# every turn and every background memory job. httpx.Client is thread-safe;
+# timeouts are passed per-request. Never closed: lives for the process.
+_HTTP = httpx.Client()
 
 
 # ---- audio I/O ---------------------------------------------------------------
@@ -196,7 +199,9 @@ def _now_context() -> str:
     is the user's clock, so no timezone round-trip is needed. Lets the assistant
     greet by time of day and reason about 'today' / 'this morning' naturally."""
     now = datetime.now().astimezone()
-    stamp = now.strftime("%A, %B %-d, %Y at %-I:%M %p")
+    # portable (no %-d / %-I — those crash strftime on Windows)
+    hour12 = now.hour % 12 or 12
+    stamp = now.strftime("%A, %B ") + f"{now.day}, {now.year} at {hour12}:{now.minute:02d} " + now.strftime("%p")
     tz = now.strftime("%Z") or "local time"
     return f"Current date and time: {stamp} ({tz})."
 
@@ -282,22 +287,20 @@ def llm_complete(messages: list[dict], cfg: dict | None = None) -> str:
         if cfg.get("api_key"):
             headers["Authorization"] = f"Bearer {cfg['api_key']}"
         # Cloud reasoning models can be slow — generous timeout.
-        with httpx.Client(timeout=600) as client:
-            r = client.post(f"{base}/chat/completions", headers=headers,
-                            json=_openai_payload(cfg, model, messages, False))
-            r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"]
+        r = _HTTP.post(f"{base}/chat/completions", headers=headers, timeout=600,
+                       json=_openai_payload(cfg, model, messages, False))
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"]
     else:
         url = (cfg.get("ollama_url") or OLLAMA_URL).rstrip("/")
         model = cfg.get("ollama_model") or LLM_MODEL
-        with httpx.Client(timeout=600) as client:
-            r = client.post(
-                f"{url}/api/chat",
-                json={"model": model, "messages": messages, "stream": False,
-                      "think": thinking, "options": _ollama_opts(cfg)},
-            )
-            r.raise_for_status()
-            content = r.json()["message"]["content"]
+        r = _HTTP.post(
+            f"{url}/api/chat", timeout=600,
+            json={"model": model, "messages": messages, "stream": False,
+                  "think": thinking, "options": _ollama_opts(cfg)},
+        )
+        r.raise_for_status()
+        content = r.json()["message"]["content"]
     if not thinking:
         content = _THINK_TAG.sub("", content)
     return content.strip()
@@ -329,44 +332,44 @@ def llm_stream(messages: list[dict], cfg: dict | None = None):
         headers = {"Content-Type": "application/json"}
         if cfg.get("api_key"):
             headers["Authorization"] = f"Bearer {cfg['api_key']}"
-        with httpx.Client(timeout=600) as client:
-            with client.stream("POST", f"{base}/chat/completions", headers=headers,
-                               json=_openai_payload(cfg, model, messages, True)) as r:
-                r.raise_for_status()
-                for line in r.iter_lines():
-                    if not line:
-                        continue
-                    if line.startswith("data: "):
-                        line = line[6:]
-                    if line.strip() == "[DONE]":
-                        break
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-                    tok = (obj.get("choices") or [{}])[0].get("delta", {}).get("content")
-                    if tok:
-                        yield tok
+        with _HTTP.stream("POST", f"{base}/chat/completions", headers=headers, timeout=600,
+                          json=_openai_payload(cfg, model, messages, True)) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                if line.startswith("data: "):
+                    line = line[6:]
+                if line.strip() == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    print(f"[stream] skipped malformed line: {line[:80]!r}")
+                    continue
+                tok = (obj.get("choices") or [{}])[0].get("delta", {}).get("content")
+                if tok:
+                    yield tok
     else:
         url = (cfg.get("ollama_url") or OLLAMA_URL).rstrip("/")
         model = cfg.get("ollama_model") or LLM_MODEL
-        with httpx.Client(timeout=600) as client:
-            with client.stream("POST", f"{url}/api/chat",
-                               json={"model": model, "messages": messages, "stream": True,
-                                     "think": thinking, "options": _ollama_opts(cfg)}) as r:
-                r.raise_for_status()
-                for line in r.iter_lines():
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-                    tok = obj.get("message", {}).get("content")
-                    if tok:
-                        yield tok
-                    if obj.get("done"):
-                        break
+        with _HTTP.stream("POST", f"{url}/api/chat", timeout=600,
+                          json={"model": model, "messages": messages, "stream": True,
+                                "think": thinking, "options": _ollama_opts(cfg)}) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    print(f"[stream] skipped malformed line: {line[:80]!r}")
+                    continue
+                tok = obj.get("message", {}).get("content")
+                if tok:
+                    yield tok
+                if obj.get("done"):
+                    break
 
 
 # ---- memory directive parsing ------------------------------------------------
@@ -379,21 +382,27 @@ def apply_directives(strata, reply: str, memories: list[dict],
     referencing them for the rest of the session (they'd otherwise linger in
     the chat history and keep coming up after the user asked to forget them).
     """
+    # Directives can appear mid-line ("Got it. [MEM_ADD] fact") — models don't
+    # reliably put them on their own line. Split every line on the tags so the
+    # spoken text never contains a directive and every directive is applied.
+    tag_re = re.compile(r"\[MEM_(ADD|DEL)\]")
     spoken: list[str] = []
     for line in reply.splitlines():
-        s = line.strip()
-        if s.startswith("[MEM_ADD]"):
-            fact = s[len("[MEM_ADD]"):].strip()
-            if fact:
-                _add_or_supersede(strata, fact, memories)
-        elif s.startswith("[MEM_DEL]"):
-            kw = s[len("[MEM_DEL]"):].strip()
-            if kw:
-                _forget(strata, kw, memories)
+        parts = tag_re.split(line)
+        head = parts[0].strip()
+        if head:
+            spoken.append(head)
+        # parts alternates after the head: kind, payload, kind, payload, …
+        for kind, payload in zip(parts[1::2], parts[2::2]):
+            payload = payload.strip()
+            if not payload:
+                continue
+            if kind == "ADD":
+                _add_or_supersede(strata, payload, memories)
+            else:
+                _forget(strata, payload, memories)
                 if forgotten is not None:
-                    forgotten.append(kw)
-        else:
-            spoken.append(line)
+                    forgotten.append(payload)
     return "\n".join(spoken).strip()
 
 
@@ -458,15 +467,25 @@ class OllamaEmbedder:
         self.dim = len(self.embed("dimension probe"))
 
     def embed(self, text: str) -> list[float]:
-        with httpx.Client(timeout=60) as client:
-            r = client.post(f"{self.url}/api/embed",
-                            json={"model": self.model, "input": text or " "})
-            r.raise_for_status()
-            data = r.json()
+        r = _HTTP.post(f"{self.url}/api/embed", timeout=60,
+                       json={"model": self.model, "input": text or " "})
+        r.raise_for_status()
+        data = r.json()
         # /api/embed returns {"embeddings":[[...]]}; tolerate the older shape too.
         if "embeddings" in data:
             return data["embeddings"][0]
         return data["embedding"]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed many texts in ONE round trip — /api/embed accepts a list. One
+        HTTP call instead of N; used wherever several texts need vectors at once
+        (recap scoring, exemplar warmup)."""
+        if not texts:
+            return []
+        r = _HTTP.post(f"{self.url}/api/embed", timeout=120,
+                       json={"model": self.model, "input": [t or " " for t in texts]})
+        r.raise_for_status()
+        return r.json()["embeddings"]
 
 
 def make_embedder():
@@ -516,10 +535,12 @@ def recall_memories(strata, query: str, top_k: int = RECALL_TOP_K) -> list[str]:
 
 
 def select_memories(strata, query: str, *, semantic: bool = True,
-                    threshold: int = RECALL_THRESHOLD) -> list[str]:
+                    threshold: int = RECALL_THRESHOLD, mems=None) -> list[str]:
     """Pick the memory texts to inject this turn. Small store -> inject everything
-    (perfect, ~free). Large store -> semantic recall of the most relevant few."""
-    mems = list_memories(strata)
+    (perfect, ~free). Large store -> semantic recall of the most relevant few.
+    Pass ``mems`` (a fresh list_memories snapshot) to avoid a duplicate query."""
+    if mems is None:
+        mems = list_memories(strata)
     if not semantic or len(mems) <= threshold:
         return [m["text"] for m in mems]
     return recall_memories(strata, query)
@@ -535,6 +556,35 @@ def select_memories(strata, query: str, *, semantic: bool = True,
 # and captured questions as facts ("do you remember how to X" -> "How to X").
 def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip(" .,!?;:'\"").strip()
+
+
+def _first_json_array(raw: str) -> str | None:
+    """Return the first balanced JSON array in `raw`, or None. The old greedy
+    re.search(r"\\[.*\\]", DOTALL) spanned from the FIRST '[' to the LAST ']' —
+    if a chatty model emitted two arrays (or brackets in prose), the span was
+    invalid JSON and the result was silently dropped."""
+    start = raw.find("[")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(raw)):
+            c = raw[i]
+            if in_str:
+                if esc: esc = False
+                elif c == "\\": esc = True
+                elif c == '"': in_str = False
+            elif c == '"': in_str = True
+            elif c == "[": depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    seg = raw[start:i + 1]
+                    try:
+                        json.loads(seg)
+                        return seg
+                    except Exception:
+                        break   # not valid JSON — try the next '['
+        start = raw.find("[", start + 1)
+    return None
 
 
 def _mem_cfg(cfg: dict | None) -> dict:
@@ -600,7 +650,7 @@ def polish_fact(candidate: str, cfg: dict | None = None) -> str | None:
     candidate = _clean(candidate or "")
     if not candidate:
         return None
-    fallback = candidate[0].upper() + candidate[1:]
+    fallback = candidate.upper() if len(candidate) == 1 else candidate[0].upper() + candidate[1:]
     try:
         reply = llm_complete([{"role": "user", "content": _POLISH_PROMPT.format(text=candidate)}], _mem_cfg(cfg))
         reply = _THINK_TAG.sub("", reply).strip().strip('"').strip()
@@ -665,17 +715,17 @@ def extract_facts_llm(user_text: str, existing: list[str], cfg: dict | None = No
     except Exception as e:
         print(f"[memory] extraction call failed: {e}")
         return []
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    m = _first_json_array(raw)
     if not m:
         return []
     try:
-        arr = json.loads(m.group(0))
+        arr = json.loads(m)
     except Exception:
         return []
     out = []
     for x in arr:
         if isinstance(x, str) and len(_clean(x)) > 2:
-            out.append(_clean(x))
+            out.append(_clean(x)[:160])   # a memory is one short fact, never a paragraph
     return out[:5]
 
 
@@ -742,14 +792,14 @@ def harvest_session_facts(turns: list[dict], existing: list[str],
     except Exception as e:
         print(f"[memory] harvest call failed: {e}")
         return []
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    m = _first_json_array(raw)
     if not m:
         return []
     try:
-        arr = json.loads(m.group(0))
+        arr = json.loads(m)
     except Exception:
         return []
-    return [_clean(x) for x in arr if isinstance(x, str) and len(_clean(x)) > 2][:8]
+    return [_clean(x)[:160] for x in arr if isinstance(x, str) and len(_clean(x)) > 2][:8]
 
 
 _STORE_POLISH_PROMPT = """You are cleaning up a voice assistant's long-term memory store. Below are the \
@@ -791,11 +841,11 @@ def polish_memory_store(memories: list[dict], cfg: dict | None = None) -> list[d
     except Exception as e:
         print(f"[memory] store polish failed: {e}")
         return []
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    m = _first_json_array(raw)
     if not m:
         return []
     try:
-        arr = json.loads(m.group(0))
+        arr = json.loads(m)
     except Exception:
         return []
     out = []
@@ -994,21 +1044,34 @@ def relevant_recaps(strata, query: str, embedder, *, max_n: int = 3,
     vecs = _exemplar_vecs.get(embedder.model_id)
     if vecs is None:
         try:
-            vecs = [embedder.embed(x) for x in _RECALL_EXEMPLARS]
+            vecs = (embedder.embed_batch(_RECALL_EXEMPLARS)
+                    if hasattr(embedder, "embed_batch")
+                    else [embedder.embed(x) for x in _RECALL_EXEMPLARS])
         except Exception:
             vecs = []
         _exemplar_vecs[embedder.model_id] = vecs
     meta = any(_cosine(qv, ev) >= meta_thresh for ev in vecs)
 
+    # embed all uncached recaps in ONE round trip (was one HTTP call per recap)
+    missing = [s for s in summaries if s["id"] not in _recap_vecs]
+    if missing:
+        if len(_recap_vecs) > 512:   # bounded: re-embeddable cache, cheap to rebuild
+            _recap_vecs.clear()
+        try:
+            if hasattr(embedder, "embed_batch"):
+                for s, v in zip(missing, embedder.embed_batch([s["text"] for s in missing])):
+                    _recap_vecs[s["id"]] = v
+            else:
+                for s in missing:
+                    _recap_vecs[s["id"]] = embedder.embed(s["text"])
+        except Exception as e:
+            print(f"[recap] recap embed failed: {e}")
+            for s in missing:
+                _recap_vecs.setdefault(s["id"], None)
+
     selected = list(summaries[:max_n]) if meta else []
     for s in summaries:
         rv = _recap_vecs.get(s["id"])
-        if rv is None:
-            try:
-                rv = embedder.embed(s["text"])
-            except Exception:
-                rv = None
-            _recap_vecs[s["id"]] = rv
         if rv is not None and _cosine(qv, rv) >= topical_thresh:
             selected.append(s)
 
@@ -1060,7 +1123,7 @@ def review_session(strata, turns: list[dict], cfg: dict | None = None) -> dict:
             {**(cfg or {}), "thinking": False})
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
-            assessment = json.loads(m.group(0))
+            assessment = json.loads(m)
     except Exception as e:
         print(f"[review] assessment failed: {e}")
     return {"added": added, "assessment": assessment}
@@ -1107,11 +1170,11 @@ def audit_memories(strata, cfg: dict | None = None) -> list[dict]:
     except Exception as e:
         print(f"[audit] call failed: {e}")
         return []
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    m = _first_json_array(raw)
     if not m:
         return []
     try:
-        arr = json.loads(m.group(0))
+        arr = json.loads(m)
     except Exception:
         return []
     issues = []
@@ -1161,8 +1224,8 @@ def judge_recall(facts: list[str], answer: str, cfg: dict | None = None) -> list
             [{"role": "user", "content": _JUDGE_PROMPT.format(
                 facts=numbered, answer=answer or "")}],
             {**(cfg or {}), "thinking": False})
-        m = re.search(r"\[.*\]", raw, re.DOTALL)
-        arr = json.loads(m.group(0)) if m else []
+        m = _first_json_array(raw)
+        arr = json.loads(m) if m else []
     except Exception as e:
         print(f"[eval] judge failed: {e}")
         return [False] * len(facts)
