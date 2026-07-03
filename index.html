@@ -707,6 +707,9 @@
   }
   .savebtn:hover{ transform:translateY(-1px); filter:brightness(1.04); }
   .savebtn:disabled{ opacity:.7; cursor:default; transform:none; }
+  /* compact Save pinned in the panel header — the header doesn't scroll, so it's
+     always reachable without scrolling to the bottom of a long settings page */
+  .savebtn.headsave{ margin:0 0 0 auto; padding:.55em 1.5em; font-size:.92rem; flex:none; }
 
   /* ---------- settings controls ---------- */
   .subhead{ font-family:"Fraunces",serif; font-weight:440; font-size:1.2rem; color:var(--ink); margin:1.8rem 0 .9rem; }
@@ -998,7 +1001,7 @@
 
   <!-- SETTINGS -->
   <section class="view panel" id="settings" hidden>
-    <header class="panelhead"><button class="back" data-back aria-label="Back">←</button><h2>Settings</h2></header>
+    <header class="panelhead"><button class="back" data-back aria-label="Back">←</button><h2>Settings</h2><button class="savebtn headsave" id="settingsSaveTop">Save</button></header>
     <div class="panelbody">
       <p class="panelsub">Voice, cadence, and persona changes take effect on your next reply — no need to restart a conversation. Renaming {{ASSISTANT_NAME}} takes effect after a page refresh.</p>
       <div class="field"><label>Assistant name</label><input id="set_name" autocomplete="off" spellcheck="false"></div>
@@ -1089,6 +1092,7 @@
       <div class="teststatus" id="set_previewstatus"></div>
 
       <h3 class="subhead">Model</h3>
+      <p class="hint" style="margin:-.4rem 0 1rem">Memory works with every option here. Local Ollama or any OpenAI-compatible endpoint — LM Studio, vLLM, llama.cpp, OpenAI, DeepSeek, or a model hosted on another machine on your network — gets the full memory system: saving facts, recall, recaps, and end-of-call review all run through the model you pick.</p>
       <div id="setModel"></div>
 
       <h3 class="subhead">Model controls</h3>
@@ -1879,18 +1883,22 @@ async function saveSettings(){
   if(engChanged){ tst.className="teststatus busy"; tst.textContent = body.tts_engine==="chatterbox"
     ? "Downloading & loading Chatterbox… first time only (~1 GB). This can take a minute — keep this tab open."
     : "Switching to Kokoro…"; }
-  const btn=$("#settingsSave"); btn.disabled=true; btn.textContent="Saving…";
+  // two Save buttons share one state: the pinned header one and the bottom one
+  const btns=[["#settingsSave","Save settings"],["#settingsSaveTop","Save"]]
+    .map(([sel,def])=>({el:$(sel),def})).filter(b=>b.el);
+  const paintBtns=(dis,txt)=>btns.forEach(b=>{ b.el.disabled=dis; b.el.textContent=txt||b.def; });
+  paintBtns(true,"Saving…");
   let d={};
   try{ d=await (await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); }catch(_){}
   if(d && d.asr_error){
     ast.className="teststatus err";
     ast.textContent="Couldn’t load that model: "+d.asr_error+" — kept your previous one.";
-    btn.disabled=false; btn.textContent="Save settings"; return;
+    paintBtns(false); return;
   }
   if(d && d.tts_error){
     tst.className="teststatus err";
     tst.textContent="Couldn’t load that voice engine: "+d.tts_error+" — kept your previous one.";
-    btn.disabled=false; btn.textContent="Save settings"; return;
+    paintBtns(false); return;
   }
   if(asrChanged){ ast.className="teststatus ok"; ast.textContent="Speech model ready ✓"; }
   if(engChanged){ tst.className="teststatus ok"; tst.textContent="Voice engine ready ✓"; }
@@ -1907,8 +1915,8 @@ async function saveSettings(){
       +'<button class="linkbtn" id="set_refreshNow">refresh now</button>';
     const rb=document.getElementById("set_refreshNow"); if(rb) rb.addEventListener("click",()=>location.reload());
   }
-  btn.textContent="Saved ✓";
-  setTimeout(()=>{ btn.disabled=false; btn.textContent="Save settings"; }, 1200);
+  paintBtns(true,"Saved ✓");
+  setTimeout(()=>paintBtns(false), 1200);
 }
 
 /* ---------- onboarding model step ---------- */
@@ -2801,6 +2809,7 @@ $("#dbg_bargein").addEventListener("click",(e)=>{
 });
 $("#profileSave").addEventListener("click", saveProfile);
 $("#settingsSave").addEventListener("click", saveSettings);
+$("#settingsSaveTop").addEventListener("click", saveSettings);
 $("#modelsetupSave").addEventListener("click", saveModelSetup);
 $("#set_thinking").addEventListener("click", (e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
