@@ -1113,7 +1113,7 @@
       </div>
       <div class="field"><label>Memory model</label>
         <select id="set_memmodel" class="select"><option value="">Same as chat model</option></select>
-        <div class="hint">Which model writes memories (saving facts, recaps) in the background. Only worth changing if your Mac has enough memory to hold two models at once — otherwise each background job swaps models in and out (~8 s each way) and your next reply pays the reload.</div>
+        <div class="hint">Which model writes memories (saving facts, recaps) in the background. Lists whatever your current endpoint serves — local Ollama or any OpenAI-compatible API. On Ollama, only worth changing if your Mac can hold two models at once — otherwise each background job swaps models in and out (~8 s each way) and your next reply pays the reload.</div>
       </div>
 
       <h3 class="subhead">Speech recognition</h3>
@@ -1734,16 +1734,20 @@ async function loadSettings(){
   $("#set_vad_prefix").value=vpre; $("#set_vad_prefixval").textContent=vpre+" ms";
   const vmin=(s.vad_min_speech_ms!=null?s.vad_min_speech_ms:250);
   $("#set_vad_minspeech").value=vmin; $("#set_vad_minspeechval").textContent=vmin+" ms";
-  // memory model picker (background memory work; "" = same as chat model)
+  // memory model picker (background memory work; "" = same as chat model).
+  // Lists whatever the active backend serves: Ollama tags, or GET {base}/models
+  // on any OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp, OpenAI…).
   try{
     const md=$("#set_memmodel");
-    const d=await (await fetch("/ollama/models")).json();
-    const names=(d.models||[]).map(m=>m.name||m.model).filter(Boolean);
+    const src = s.backend==="openai" ? "/openai/models" : "/ollama/models";
+    const d=await (await fetch(src)).json();
+    // both endpoints return plain strings; tolerate object shapes too
+    const names=(d.models||[]).map(m=>typeof m==="string"?m:(m.name||m.model||m.id)).filter(Boolean);
     md.innerHTML='<option value="">Same as chat model</option>'+
       names.map(n=>`<option value="${n}">${n}</option>`).join("");
     md.value=s.memory_model||"";
-    if(md.value!==(s.memory_model||"")){   // saved model no longer installed
-      md.innerHTML+=`<option value="${s.memory_model}">${s.memory_model} (not installed)</option>`;
+    if(md.value!==(s.memory_model||"") && s.memory_model){   // saved model not in the list
+      md.innerHTML+=`<option value="${s.memory_model}">${s.memory_model} (not listed)</option>`;
       md.value=s.memory_model;
     }
   }catch(_){}

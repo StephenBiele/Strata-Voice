@@ -96,7 +96,8 @@ DEFAULT_SETTINGS = {
     "asr_backend": vc.ASR_BACKEND,       # loader id (only 'mlx-audio' ships)
     # Microphone input device (browser deviceId; "" = system default)
     "mic_device": "",
-    # Ollama model for background memory work ("" = same as chat model).
+    # Model for background memory work ("" = same as chat model) — an Ollama
+    # model name or a model id on the OpenAI-compatible endpoint, per backend.
     # Memory jobs run behind the conversation, so a bigger, slower model can
     # write more accurate memories without touching voice latency.
     "memory_model": "",
@@ -331,8 +332,9 @@ def _mem_llm_cfg() -> dict:
     slowness never touches voice latency. Empty = same model as chat."""
     cfg = _llm_cfg()
     mm = _settings().get("memory_model", "").strip()
-    if mm and cfg.get("backend") == "ollama":
-        cfg["ollama_model"] = mm
+    if mm:   # works on either backend — a different Ollama model or a different
+             # model id at the same OpenAI-compatible endpoint
+        cfg["ollama_model" if cfg.get("backend") == "ollama" else "openai_model"] = mm
     return cfg
 
 
@@ -531,7 +533,9 @@ def _load_models() -> None:
         print(f"[tts] saved engine failed to load ({e}); using Kokoro")
         _tts, _tts_engine = _load_tts("kokoro")
     Path(vc.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    _embedder = vc.make_embedder()
+    # Embeddings follow the configured Ollama endpoint — which may be another
+    # machine on the network — instead of assuming localhost.
+    _embedder = vc.make_embedder(s.get("ollama_url") or vc.OLLAMA_URL)
     _strata = Strata.open(db_path=vc.DB_PATH, embedder=_embedder)
     if _embedder is not None:
         n = vc.warm_index(_strata)
@@ -670,7 +674,8 @@ def _memory_worker() -> None:
     store *vector* recall of a just-written fact may lag until the next index warm."""
     try:
         from strata.gateway.api import Strata
-        st = Strata.open(db_path=vc.DB_PATH, embedder=vc.make_embedder())
+        st = Strata.open(db_path=vc.DB_PATH,
+                         embedder=vc.make_embedder(_settings().get("ollama_url") or vc.OLLAMA_URL))
     except Exception as e:
         print(f"[memory] memory worker disabled ({e}); "
               "new facts won't be saved this session (forgets still work)")
@@ -1509,6 +1514,24 @@ class Handler(BaseHTTPRequestHandler):
                 r = httpx.get(f"{url}/api/tags", timeout=5)
                 names = [m["name"] for m in r.json().get("models", []) if m.get("name")]
                 return self._json(200, {"ok": True, "models": sorted(names)})
+            except Exception as e:
+                return self._json(200, {"ok": False, "error": str(e), "models": []})
+        if u.path == "/openai/models":
+            # Model list from the configured OpenAI-compatible endpoint (GET
+            # {base}/models is part of the standard — LM Studio, vLLM, llama.cpp
+            # server, OpenAI, DeepSeek all serve it). Feeds the memory-model picker.
+            base = (parse_qs(u.query).get("base", [None])[0] or _settings()["openai_base"]).rstrip("/")
+            if not base:
+                return self._json(200, {"ok": False, "error": "no API endpoint configured", "models": []})
+            try:
+                import httpx
+                headers = {}
+                key = _get_api_key()
+                if key:
+                    headers["Authorization"] = f"Bearer {key}"
+                r = httpx.get(f"{base}/models", headers=headers, timeout=5)
+                ids = [m.get("id") for m in r.json().get("data", []) if m.get("id")]
+                return self._json(200, {"ok": True, "models": sorted(ids)})
             except Exception as e:
                 return self._json(200, {"ok": False, "error": str(e), "models": []})
         if u.path == "/memories":

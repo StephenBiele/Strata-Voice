@@ -553,11 +553,13 @@ class OllamaEmbedder:
         return r.json()["embeddings"]
 
 
-def make_embedder():
+def make_embedder(url: str = OLLAMA_URL):
     """Return an OllamaEmbedder if the embed model is available, else None so the
-    caller falls back to the offline default (and the dump-all recall path)."""
+    caller falls back to the offline default (and the dump-all recall path).
+    `url` lets the server pass the user's configured Ollama endpoint — which may
+    be another machine on the network — instead of assuming localhost."""
     try:
-        emb = OllamaEmbedder()
+        emb = OllamaEmbedder(url=url)
         print(f"  · semantic recall: ON ({emb.model_id}, dim={emb.dim})")
         return emb
     except Exception as e:

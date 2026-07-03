@@ -101,10 +101,17 @@ each question pulls in only the passages relevant to what you asked instead of b
 context window.
 
 **Bring any model** — local Ollama out of the box, or any OpenAI-compatible endpoint
-(llama.cpp, LM Studio, vLLM, OpenAI …). API keys live in the **macOS Keychain**, never
-on disk. Full LLM controls (temperature, top-p, max tokens, context window), a live
-speech-recognition picker (Parakeet, Whisper, Qwen3-ASR), voice cadence tuning with
-A/B preview, and a background-work pill so memory processing is never invisible.
+(llama.cpp, LM Studio, vLLM, OpenAI, DeepSeek …), including one hosted on another
+machine on your network. **The full memory system rides whatever backend you pick** —
+explicit remembers, background fact extraction, end-of-call harvest, and recaps all
+run through your endpoint; a separate "Memory model" can be chosen from whatever that
+endpoint serves. Only semantic-recall embeddings stay on Ollama (point `OLLAMA_URL`
+or the Settings URL at any Ollama, local or remote; without one, recall falls back
+to inject-everything and memory keeps working). API keys live in the **macOS
+Keychain**, never on disk. Full LLM controls (temperature, top-p, max tokens,
+context window), a live speech-recognition picker (Parakeet, Whisper, Qwen3-ASR),
+voice cadence tuning with A/B preview, and a background-work pill so memory
+processing is never invisible.
 
 **Expressive voice (optional)** — switch the voice engine to **Chatterbox-Turbo** in
 Settings and the assistant can perform natural laughs and sighs where they fit,
@@ -203,13 +210,14 @@ Most things live in **Settings**. Startup options are env vars:
 
 | Var | Default | Notes |
 | :--- | :--- | :--- |
+| `VOICE_HOST` | `127.0.0.1` | bind address — set `0.0.0.0` to reach the app from other devices on your network |
 | `VOICE_PORT` | `8765` | web server port |
 | `VOICE_VAD_PORT` | `8766` | hands-free VAD channel |
 | `VOICE_NAME` | `Sage` | initial assistant name |
 | `VOICE_LLM_MODEL` | `qwen3.5:4b` | default Ollama model (the installer seeds your tier's pick) |
 | `VOICE_ASR_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | ASR model id (or pick in Settings) |
 | `VOICE_TTS_CHATTERBOX` | `mlx-community/chatterbox-turbo-fp16` | expressive engine id (used when the voice engine is Chatterbox) |
-| `OLLAMA_URL` | `http://localhost:11434` | local Ollama endpoint |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint (chat + embeddings) — may be another machine on your network |
 
 ## Uninstall
 
