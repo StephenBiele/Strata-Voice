@@ -2441,14 +2441,14 @@ function persistSettings(partial){
 }
 
 /* ---------- events ---------- */
-$("#beginBtn").addEventListener("click", start);
+$("#beginBtn").addEventListener("click", ()=>start(false));   // voice mode (don't pass the click event as textMode)
 endBtn.addEventListener("click", end);
 const muteBtn=$("#muteBtn");
 muteBtn.addEventListener("click", ()=>setMuted(!muted));
 $("#endedHome").addEventListener("click", ()=>showView("landing"));
 historyToggle.addEventListener("click",()=>setHistoryCollapsed(!call.classList.contains("history-collapsed")));
 historyClose.addEventListener("click",()=>setHistoryCollapsed(true));
-$("#newConvoBtn").addEventListener("click", start);
+$("#newConvoBtn").addEventListener("click", ()=>start(false));   // voice mode
 // incognito: this conversation isn't saved or remembered (existing memory is still used)
 const incognitoBtn=$("#incognitoBtn"), bylineEl=document.querySelector("#call .byline");
 incognitoBtn.addEventListener("click",()=>{
