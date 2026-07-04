@@ -171,6 +171,18 @@ print("  ✓ speech models cached")
 PY
 fi
 
+# ---- 8. optional Mac app --------------------------------------------------------
 echo
-printf "%s✦ Done.%s  Start it any time with:  %s./start.sh%s\n" "$BOLD" "$RESET" "$BOLD" "$RESET"
+printf "Build the Mac app too (Strata Voice.app — its own window and Dock icon)? [Y/n]: "
+read -r APPB || APPB="n"
+if [ "$APPB" != "n" ] && [ "$APPB" != "N" ]; then
+  ./make_app.sh
+fi
+
+echo
+if [ -d "Strata Voice.app" ]; then
+  printf "%s✦ Done.%s  Start it with:  %sopen \"Strata Voice.app\"%s  or  %s./start.sh%s\n" "$BOLD" "$RESET" "$BOLD" "$RESET" "$BOLD" "$RESET"
+else
+  printf "%s✦ Done.%s  Start it any time with:  %s./start.sh%s\n" "$BOLD" "$RESET" "$BOLD" "$RESET"
+fi
 echo

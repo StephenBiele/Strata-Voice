@@ -45,8 +45,8 @@ short version; below it, the complete inventory.
 - **Barge-in** — talking over a reply interrupts it instantly (toggleable; leans
   on browser echo cancellation).
 - **True mute** — releases the microphone at the OS level (the indicator light
-  goes dark; other apps like Discord get it back), stops any playing reply, and
-  pauses the call timer.
+  goes dark; other apps like Discord get it back) and pauses the call timer,
+  while a reply in progress finishes speaking.
 - **Voice tuning** — sensitivity, pause-before-it-replies, lead-in padding, and
   minimum speech length, all in plain language.
 - **In-call live tuning panel** — adjust those knobs mid-conversation while
@@ -210,7 +210,12 @@ short version; below it, the complete inventory.
 ### Install & under the hood
 
 - **One-command install** — checks prerequisites (Python, ffmpeg, Ollama —
-  installed if missing), builds the environment, offers hardware tiers.
+  installed if missing), builds the environment, offers hardware tiers, and can
+  build the Mac app for you.
+- **A real Mac app** — `./make_app.sh` builds Strata Voice.app: a native window
+  (WKWebView, no Electron) with its own Dock icon and a proper microphone
+  permission prompt. It starts Ollama and the server if needed, and only shuts
+  down what it started.
 - **Guarded uninstall** — prompts before every destructive step; your data is
   asked about twice.
 - **Your data, outside the repo** — everything lives in `~/.vui`, untouched by

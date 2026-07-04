@@ -91,9 +91,10 @@ talking. Barge-in leans on your browser's echo cancellation: if it interrupts it
 through speakers, use headphones.
 
 **Don't want it listening? Mute or type** — the mute button pauses the conversation
-(and the call timer) and hands the mic back to the OS entirely; typing while muted
-gets a text reply, typing while live gets a spoken one. Ending a conversation keeps
-you on the call page — one tap starts the next.
+(and the call timer) and hands the mic back to the OS entirely, while a reply in
+progress finishes speaking — muting means "stop hearing me", not "stop talking".
+Typing while muted gets a text reply, typing while live gets a spoken one. Ending a
+conversation keeps you on the call page — one tap starts the next.
 
 **Real memory** — nothing is stored verbatim from a voice transcript. A smoothing layer
 rewrites explicit "remember…" requests into clean third-person facts, a background
