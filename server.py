@@ -1639,6 +1639,19 @@ class Handler(BaseHTTPRequestHandler):
             html = (HERE / "index.html").read_text(encoding="utf-8")
             html = html.replace("{{ASSISTANT_NAME}}", _settings()["assistant_name"])
             return self._send(200, html, "text/html; charset=utf-8")
+        if u.path in ("/favicon.svg", "/favicon.ico", "/favicon.png",
+                      "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"):
+            # app icon (icons/): SVG for modern browsers, PNGs as fallbacks
+            if u.path == "/favicon.svg":
+                f, mime = "icon.svg", "image/svg+xml"
+            elif u.path.startswith("/apple-touch"):
+                f, mime = "apple-touch-icon.png", "image/png"
+            else:
+                f, mime = "favicon-32.png", "image/png"   # .ico path: PNG is accepted
+            p = HERE / "icons" / f
+            if not p.exists():
+                return self._json(404, {"ok": False, "error": "not found"})
+            return self._send(200, p.read_bytes(), mime)
         if u.path == "/config":
             return self._json(200, {"name": _settings()["assistant_name"],
                                     "vad_port": VAD_PORT})

@@ -1,0 +1,21 @@
+<svg width="220" height="220" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<clipPath id="sqHillOnly"><rect x="20" y="20" width="180" height="180" rx="40"/></clipPath>
+<radialGradient id="orbSmoothHillOnly" cx="38%" cy="32%" r="75%">
+<stop offset="0%" stop-color="#C3D9A8"/>
+<stop offset="45%" stop-color="#8FAD6E"/>
+<stop offset="100%" stop-color="#576E40"/>
+</radialGradient>
+</defs>
+<g clip-path="url(#sqHillOnly)">
+<rect x="20" y="20" width="180" height="180" fill="#E7ECDF"/>
+<circle cx="110" cy="300" r="150" fill="#B8CE9B"/>
+<circle cx="110" cy="300" r="138" fill="#8FAD6E"/>
+<circle cx="110" cy="300" r="126" fill="#6B8752"/>
+<circle cx="110" cy="300" r="114" fill="#576E40"/>
+<circle cx="110" cy="300" r="102" fill="#3F5230"/>
+<circle cx="110" cy="90" r="46" fill="none" stroke="#70845D" stroke-width="1.5" opacity="0.18"/>
+<circle cx="110" cy="90" r="38" fill="none" stroke="#70845D" stroke-width="1.5" opacity="0.3"/>
+<circle cx="110" cy="90" r="30" fill="url(#orbSmoothHillOnly)"/>
+</g>
+</svg>
