@@ -384,8 +384,14 @@ def _read_json(path: Path, default):
 
 
 def _write_json(path: Path, data):
+    """Atomic write: serialize first (a bad object can't half-write), then
+    temp-file + rename so a crash mid-write can never truncate user data —
+    the file is always either the old version or the new one, never garbage."""
+    payload = json.dumps(data, indent=2)   # raises BEFORE touching the file
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2))
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(payload)
+    os.replace(tmp, path)                  # atomic on POSIX
     _json_cache.pop(path, None)
 
 

@@ -243,6 +243,7 @@ Strata-Voice/
 ├── voicechat.py    models + pipeline: ASR/TTS loading, LLM calls, prompt assembly,
 │                     the Strata Memory integration; also a minimal CLI mode
 ├── index.html      the entire front-end, one file
+├── tests/          data-safety checks (see docs/DATA-SAFETY.md) — ./tests/run.sh
 ├── install.sh      one-command installer (tiers, models, prerequisites)
 ├── start.sh        start Ollama + the server, open the browser
 └── uninstall.sh    guarded uninstaller — prompts before every destructive step
