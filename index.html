@@ -1249,7 +1249,7 @@
         <div class="toolbar">
           <button class="toolbtn" id="auditBtn" title="Scan your memories for facts that contradict each other, duplicates, and junk — with one-click fixes">⚖ Find contradictions</button>
           <button class="toolbtn" id="evalBtn" title="Quiz the model on your profile and memories to check what it can actually recall">✓ Run recall test</button>
-          <button class="toolbtn" id="polishBtn" title="Rewrite awkward memories, drop junk — the same smoothing new memories get">✨ Smooth memories</button>
+          <button class="toolbtn" id="polishBtn" title="Drafts cleanups for awkward or junky memories — you review and approve each one before anything changes">✨ Smooth memories</button>
         </div>
         <div id="memTools" class="toolresult" hidden></div>
         <div id="memoriesBody"></div>
@@ -2715,22 +2715,97 @@ auditBtn.addEventListener("click", async()=>{
 // one-shot smoothing pass over the whole store — same treatment new memories get
 const polishBtn=$("#polishBtn");
 polishBtn.addEventListener("click", async()=>{
-  polishBtn.disabled=true; polishBtn.textContent="Smoothing…";
-  memTools.hidden=false; memTools.innerHTML='<div class="muted">Reviewing every memory — rewriting garble, dropping junk…</div>';
+  polishBtn.disabled=true; polishBtn.textContent="Reviewing…";
+  memTools.hidden=false; memTools.innerHTML='<div class="muted">Reading every memory and drafting cleanups — nothing changes until you approve it…</div>';
   let r={}; try{ r=await (await fetch("/memory/polish",{method:"POST"})).json(); }catch(_){}
   polishBtn.disabled=false; polishBtn.textContent="✨ Smooth memories";
   if(!r.ok){ memTools.innerHTML='<div class="muted">Couldn’t run the smoothing pass.</div>'; return; }
-  let html=`<div class="rhead">Memory smoothing <span class="muted">${r.rewrote} rewritten · ${r.removed} removed · ${r.kept} kept</span></div>`;
-  (r.changes||[]).forEach(ch=>{
-    if(ch.action==="rewrite")
-      html+=`<div class="issue"><div class="drop">${esc(ch.old)}</div><div class="keep">→ ${esc(ch.text)}</div></div>`;
-    else
-      html+=`<div class="issue"><div class="drop">Removed: ${esc(ch.old)}</div></div>`;
-  });
-  if(!(r.changes||[]).length) html+='<div class="muted">Everything was already clean.</div>';
-  memTools.innerHTML=html;
-  loadMemories();
+  renderPolish(r.changes||[]);
 });
+/* Smoothing is propose-then-approve: the model drafts cleanups, you're the
+   gatekeeper. Apply / edit / dismiss each one, or take the batch actions. */
+async function applyPolish(list){
+  try{
+    const d=await (await fetch("/memory/polish/apply",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({changes:list})})).json();
+    return (d&&d.ok)?d:{applied:0,skipped:list.length};
+  }catch(_){ return {applied:0,skipped:list.length}; }
+}
+function renderPolish(changes){
+  memTools.hidden=false;
+  if(!changes.length){
+    memTools.innerHTML='<div class="rhead">Memory smoothing</div><div class="muted">Everything already reads clean — no suggestions.</div>';
+    return;
+  }
+  memTools.innerHTML='<div class="rhead">Memory smoothing <span class="muted" id="polishCount"></span></div>'+
+    '<div class="muted" style="margin-bottom:.6rem">These are suggestions — nothing is changed until you approve it. Take them one by one, or all at once.</div>';
+  const counts=()=>{
+    const n=changes.filter(c=>!c._done).length;
+    const el=$("#polishCount"); if(el) el.textContent = n ? `${n} suggestion${n===1?"":"s"} pending` : "all reviewed";
+    return n;
+  };
+  const bar=document.createElement("div"); bar.style.cssText="display:flex;gap:.5rem;margin-bottom:.7rem;flex-wrap:wrap";
+  const allBtn=document.createElement("button"); allBtn.className="toolbtn"; allBtn.textContent="Apply all";
+  const noneBtn=document.createElement("button"); noneBtn.className="toolbtn"; noneBtn.textContent="Dismiss all";
+  bar.append(allBtn,noneBtn); memTools.appendChild(bar);
+  changes.forEach(ch=>{
+    const el=document.createElement("div"); el.className="issue"; ch._card=el;
+    let editArea=null;
+    const paint=()=>{
+      el.innerHTML="";
+      if(ch.action==="rewrite"){
+        el.insertAdjacentHTML("beforeend",`<div class="drop">${esc(ch.old)}</div>`);
+        if(editArea) el.appendChild(editArea);
+        else el.insertAdjacentHTML("beforeend",`<div class="keep">→ ${esc(ch.text)}</div>`);
+      }else{
+        el.insertAdjacentHTML("beforeend",`<div class="drop">Remove: ${esc(ch.old)}</div>`);
+      }
+      const row=document.createElement("div"); row.style.cssText="display:flex;gap:.45rem;margin-top:.45rem";
+      const ap=document.createElement("button"); ap.className="toolbtn";
+      ap.textContent = ch.action==="delete" ? "Remove it" : "Apply";
+      ap.addEventListener("click", async()=>{
+        if(editArea && editArea.value.trim()) ch.text=editArea.value.trim();
+        ap.disabled=true; ap.textContent="Applying…";
+        const d=await applyPolish([{id:ch.id,action:ch.action,old:ch.old,text:ch.text}]);
+        ch._done=true;
+        el.innerHTML = d.applied ? '<div class="muted">Applied ✓</div>'
+          : '<div class="muted">Skipped — that memory changed since the review. Run smoothing again for a fresh look.</div>';
+        counts(); loadMemories();
+      });
+      row.appendChild(ap);
+      if(ch.action==="rewrite" && !editArea){
+        const ed=document.createElement("button"); ed.className="toolbtn"; ed.textContent="Edit";
+        ed.addEventListener("click",()=>{
+          editArea=document.createElement("textarea");
+          editArea.value=ch.text; editArea.rows=2;
+          editArea.style.cssText="width:100%;margin-top:.35rem;font:inherit";
+          paint(); editArea.focus();
+        });
+        row.appendChild(ed);
+      }
+      const dis=document.createElement("button"); dis.className="toolbtn"; dis.textContent="Dismiss";
+      dis.addEventListener("click",()=>{
+        ch._done=true; el.innerHTML='<div class="muted">Dismissed — left as it was.</div>'; counts();
+      });
+      row.appendChild(dis);
+      el.appendChild(row);
+    };
+    paint(); memTools.appendChild(el);
+  });
+  allBtn.addEventListener("click", async()=>{
+    const todo=changes.filter(c=>!c._done);
+    if(!todo.length) return;
+    allBtn.disabled=noneBtn.disabled=true; allBtn.textContent="Applying…";
+    const d=await applyPolish(todo.map(c=>({id:c.id,action:c.action,old:c.old,text:c.text})));
+    todo.forEach(c=>{ c._done=true; c._card.innerHTML='<div class="muted">Applied ✓</div>'; });
+    allBtn.textContent=`Applied ${d.applied}${d.skipped?` · ${d.skipped} skipped`:""}`;
+    counts(); loadMemories();
+  });
+  noneBtn.addEventListener("click",()=>{
+    changes.forEach(c=>{ if(!c._done){ c._done=true; c._card.innerHTML='<div class="muted">Dismissed — left as it was.</div>'; } });
+    noneBtn.textContent="Dismissed"; allBtn.disabled=noneBtn.disabled=true; counts();
+  });
+  counts();
+}
 function renderAudit(issues){
   if(!issues.length){ memTools.innerHTML=`<div class="rhead">Memory hygiene${infoIcon(AUDIT_TIP)}</div><div class="muted">Nothing to clean up — no contradictions, redundancy, duplicates, or junk found.</div>`; return; }
   memTools.innerHTML=`<div class="rhead">Memory hygiene <span class="muted">${issues.length} item${issues.length===1?"":"s"}</span>${infoIcon(AUDIT_TIP)}</div>`;

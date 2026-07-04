@@ -1754,31 +1754,45 @@ class Handler(BaseHTTPRequestHandler):
             _write_json(DOCS_FILE, docs)
             return self._json(200, {"ok": True})
         if u.path == "/memory/polish":
-            # one-shot smoothing pass over the whole store (Memories page button):
-            # LLM proposes keep/rewrite/delete off-lock; brief writes under _lock
+            # Propose-only smoothing pass (Memories page button). The LLM drafts
+            # cleanups off-lock; NOTHING is applied here — the user reviews each
+            # suggestion and /memory/polish/apply commits the approved ones. A
+            # months-old store never gets blind-rewritten by one click.
             with _lock:
                 mems = vc.list_memories(_strata)
             changes = vc.polish_memory_store(mems, _mem_llm_cfg())   # slow LLM, off-lock
-            rewrote = removed = 0
-            detail = []
+            # ids stringified: 64-bit ints round past 2^53 in JS
+            out = [{"id": str(ch["id"]), "action": ch["action"], "old": ch["old"],
+                    **({"text": ch["text"]} if ch.get("text") else {})} for ch in changes]
+            return self._json(200, {"ok": True, "changes": out,
+                                    "total": len(mems), "kept": len(mems) - len(out)})
+        if u.path == "/memory/polish/apply":
+            # Apply the user-approved smoothing suggestions. Each one re-checks
+            # that the memory still reads exactly as it did at review time —
+            # anything stale (edited/deleted since) is skipped, never guessed at.
+            body = json.loads(self._body() or b"{}")
+            applied = skipped = 0
             with _lock:
-                for ch in changes:
+                current = {str(m["id"]): m["text"] for m in vc.list_memories(_strata)}
+                for ch in body.get("changes", []):
+                    mid = str(ch.get("id", ""))
+                    if current.get(mid) != ch.get("old"):
+                        skipped += 1
+                        continue
                     try:
-                        if ch["action"] == "delete":
-                            _strata.delete_memory(int(ch["id"]), mode="hard")
-                            removed += 1
-                            detail.append({"action": "delete", "old": ch["old"]})
-                        elif ch["action"] == "rewrite":
-                            _strata.supersede_memory(int(ch["id"]), ch["text"])
-                            rewrote += 1
-                            detail.append({"action": "rewrite", "old": ch["old"],
-                                           "text": ch["text"]})
+                        if ch.get("action") == "delete":
+                            _strata.delete_memory(int(mid), mode="hard")
+                        elif ch.get("action") == "rewrite" and (ch.get("text") or "").strip():
+                            _strata.supersede_memory(int(mid), ch["text"].strip())
+                        else:
+                            skipped += 1
+                            continue
+                        applied += 1
                     except Exception as e:
-                        print(f"[memory] polish apply failed on {ch.get('id')}: {e}")
-            print(f"[memory] store polish: {rewrote} rewritten, {removed} removed")
-            return self._json(200, {"ok": True, "rewrote": rewrote,
-                                    "removed": removed, "kept": len(mems) - rewrote - removed,
-                                    "changes": detail})
+                        print(f"[memory] polish apply failed on {mid}: {e}")
+                        skipped += 1
+            print(f"[memory] store polish: {applied} applied, {skipped} skipped")
+            return self._json(200, {"ok": True, "applied": applied, "skipped": skipped})
         if u.path == "/memory/delete":
             body = json.loads(self._body() or b"{}")
             mid = body.get("id")
