@@ -233,19 +233,24 @@ def _web_fresh_match(query: str):
     return None
 
 
-def _web_block() -> str | None:
-    """Still-fresh search results as a prompt block, purging expired entries."""
+def _web_block() -> tuple[str | None, list[dict]]:
+    """Still-fresh search results as (prompt block, source list for the UI's
+    verification chip), purging expired entries."""
     now = time.time()
     for k in [k for k, e in _web_cache.items() if now - e["t"] > WEB_TTL_S]:
         del _web_cache[k]
     if not _web_cache:
-        return None
-    parts = []
+        return None, []
+    parts, sources, seen = [], [], set()
     for e in sorted(_web_cache.values(), key=lambda e: e["t"]):
         lines = "\n".join(f"- {r['title']}: {r['description']} ({r['url']})"
                           for r in e["results"])
         parts.append(f"Search \"{e['query']}\":\n{lines}")
-    return "\n\n".join(parts)
+        for r in e["results"]:
+            if r["url"] and r["url"] not in seen:
+                seen.add(r["url"])
+                sources.append({"title": r["title"], "url": r["url"]})
+    return "\n\n".join(parts), sources
 _embedder = None    # real embedding model if available, else None (dump-all recall)
 _lock = threading.Lock()
 
@@ -1309,7 +1314,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     # Live web-activity events ({"type":"web","label":…}) narrate each stage in
     # the UI — searching → found sites, summarizing — Hermes-style, so a 2-4s
     # web turn never looks frozen.
-    web_ctx, web_fresh = None, False
+    web_ctx, web_fresh, web_sources = None, False, []
     if s.get("web_search"):
         query = vc.web_gate(text, _history[-6:], _mem_llm_cfg(),
                             place=_read_json(PROFILE_FILE, {}).get("location", ""))
@@ -1332,12 +1337,14 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
                         if d and d not in doms:
                             doms.append(d)
                     found = ", ".join(doms[:3]) or f"{len(results)} results"
-                    yield {"type": "web", "label": f"found {found} · summarizing"}
+                    # sites let the client rotate whimsical per-site wording
+                    yield {"type": "web", "label": f"found {found} · summarizing",
+                           "sites": doms[:5]}
                     print(f"[web] {len(results)} results for {query!r}")
                 else:
                     yield {"type": "web", "label": "the search came up empty"}
                     print(f"[web] no results for {query!r}")
-        web_ctx = _web_block()
+        web_ctx, web_sources = _web_block()
 
     voice, speed = s["tts_voice"], float(s["tts_speed"])
     if speak and _tts_engine == "chatterbox":
@@ -1454,7 +1461,9 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
 
     memories = [m["text"] for m in vc.list_memories(_strata)]
     yield {"type": "done", "reply": reply, "memories": memories,
-           "session": (_session["id"] if (_session and not private) else None)}
+           "session": (_session["id"] if (_session and not private) else None),
+           # sources the reply drew on (ephemeral, for the verification chip)
+           **({"sources": web_sources} if web_ctx else {})}
 
 
 def _handle_turn_stream(wav_bytes: bytes, private: bool = False):

@@ -261,17 +261,23 @@ def web_search(query: str, limit: int = 5) -> list[dict]:
 
 
 _WEB_GATE_PROMPT = """You decide whether answering the user's LATEST message needs a live web search.
-ALWAYS search when the user explicitly asks to check, look up, verify, or google \
-something online — no matter the topic. Also search when the answer needs fresh or \
-checkable outside facts: current events, sports scores, store hours, prices, weather, \
-release dates, "is that true?" / "double check that" (verify the assistant's previous \
-claim against the web), or anything time-sensitive.
+RULE 1 (overrides everything): if the user says "look up", "look it up", "check", \
+"double check", "verify", "google", or "search" — you MUST return a query, no matter \
+the topic, even if you know the answer. "Look up when the opera house opened" -> \
+["sydney opera house opening year"].
+Also search when the answer needs fresh or checkable outside facts: current events, \
+sports scores, store hours, prices, weather, release dates, "is that true?" (verify \
+the assistant's previous claim against the web), or anything time-sensitive.
 Do NOT search for: chit-chat, opinions, memories about the user, or anything the \
-conversation itself already answers — unless the user explicitly asked to check online.
+conversation itself already answers — unless RULE 1 applies.
 
 Reply with ONLY a JSON array. If a search is needed: one short search-engine query, \
 e.g. ["home depot store hours today"]. If the user is questioning a previous claim, \
 build the query from that claim. If no search is needed: [].
+Today is {today}. ONLY when the question is about CURRENT conditions or happenings — \
+weather, news, events nearby, scores, "what's going on" — put today's actual date in \
+the query (e.g. "denver weather {today_short}") so stale pages don't win. NEVER add \
+the date or year to historical, timeless, or how-to questions — it skews the results.
 
 Recent conversation:
 {context}
@@ -289,9 +295,13 @@ def web_gate(text: str, recent_turns: list[dict] | None, cfg: dict | None = None
     ctx = "\n".join(f"{t['role']}: {t['content'][:200]}" for t in (recent_turns or [])[-6:]) or "(start of conversation)"
     if place:
         ctx = f"(user's location: {place})\n" + ctx
+    now = datetime.now().astimezone()
+    today = now.strftime("%A, %B ") + f"{now.day}, {now.year}"
+    today_short = now.strftime("%B ") + f"{now.day} {now.year}"
     try:
         raw = llm_complete([{"role": "user", "content":
-                             _WEB_GATE_PROMPT.format(context=ctx, text=text)}],
+                             _WEB_GATE_PROMPT.format(context=ctx, text=text,
+                                                     today=today, today_short=today_short)}],
                            _mem_cfg(cfg))
     except Exception as e:
         print(f"[web] gate failed ({e})")
