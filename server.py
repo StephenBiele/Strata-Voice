@@ -1306,7 +1306,10 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     # ("double check that", store hours, scores…). New results join the
     # short-lived cache; anything still fresh is injected either way so
     # follow-ups keep digging into the same data without a re-search.
-    web_ctx = None
+    # Live web-activity events ({"type":"web","label":…}) narrate each stage in
+    # the UI — searching → found sites, summarizing — Hermes-style, so a 2-4s
+    # web turn never looks frozen.
+    web_ctx, web_fresh = None, False
     if s.get("web_search"):
         query = vc.web_gate(text, _history[-6:], _mem_llm_cfg(),
                             place=_read_json(PROFILE_FILE, {}).get("location", ""))
@@ -1315,14 +1318,24 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
             if cached:
                 # actively being asked about — reuse and keep alive, no re-fetch
                 cached["t"] = time.time()
+                yield {"type": "web", "label": "going back over what it found"}
                 print(f"[web] reusing cached results for {query!r}")
             else:
-                yield {"type": "searching", "query": query}
+                yield {"type": "web", "label": f"searching the web · “{query}”"}
                 results = vc.web_search(query)
                 if results:
                     _web_remember(query, results)
+                    web_fresh = True
+                    doms = []
+                    for r in results:
+                        d = urlparse(r["url"]).netloc.replace("www.", "")
+                        if d and d not in doms:
+                            doms.append(d)
+                    found = ", ".join(doms[:3]) or f"{len(results)} results"
+                    yield {"type": "web", "label": f"found {found} · summarizing"}
                     print(f"[web] {len(results)} results for {query!r}")
                 else:
+                    yield {"type": "web", "label": "the search came up empty"}
                     print(f"[web] no results for {query!r}")
         web_ctx = _web_block()
 
@@ -1349,7 +1362,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         _history[-40:], mem_text,
         documents=_doc_context(text), profile=_profile_context(), persona=s["persona"],
         recent=recent, forgotten=_forgotten, emotion=_emotion_active() and speak,
-        web=web_ctx,
+        web=web_ctx, web_fresh=web_fresh,
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0

@@ -345,7 +345,7 @@ def _now_context() -> str:
 def build_messages(history, memories, documents=None, profile=None,
                    persona: str | None = None, recent=None,
                    forgotten=None, emotion: bool = False,
-                   web: str | None = None) -> list[dict]:
+                   web: str | None = None, web_fresh: bool = False) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
 
     `persona` is the user-editable part; the fixed MEMORY_DIRECTIVES are
@@ -386,6 +386,12 @@ def build_messages(history, memories, documents=None, profile=None,
             "you couldn't find it rather than guessing. If the user asks for more detail, "
             "draw deeper on these same results."
         )
+        if web_fresh:
+            system += (
+                " You just searched for this, so open with a very short cue that it came "
+                "from the web — vary the wording: \"Here's what I found:\", \"Just "
+                "checked —\", \"From a quick search,\"."
+            )
     system += "\n\n" + MEMORY_DIRECTIVES
     system += "\n\n" + RECALL_GUARD
     if emotion:

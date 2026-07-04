@@ -328,7 +328,7 @@
   .statusrow{ display:flex; align-items:center; justify-content:center; gap:.55rem; height:1.2em; }
   .statuslabel{
     text-transform:uppercase; letter-spacing:.22em; font-size:.7rem; font-weight:600;
-    color:var(--ink-soft); transition:color .3s var(--ease);
+    color:var(--ink-soft); transition:color .3s var(--ease), opacity .22s var(--ease);
   }
   /* AI-native 3-dot "thinking" pulse — clear processing feedback */
   .thinking-dots{ display:none; gap:.34em; align-items:center; }
@@ -677,6 +677,7 @@
     .memitem .x{ min-width:2.5rem; min-height:2.5rem; }
   }
   /* "still finishing" indicator bubble in the drawer */
+  .bubble.pending .pweb{ font-size:.78rem; color:var(--ink-faint); font-style:italic; margin-top:.35rem; }
   .bubble.pending .dots{ display:inline-flex; gap:.3em; align-items:center; }
   .bubble.pending .dots i{ width:.4em; height:.4em; border-radius:50%; background:var(--sage-deep); display:block; animation:tdot 1.1s var(--ease) infinite; }
   .bubble.pending .dots i:nth-child(2){ animation-delay:.18s; }
@@ -1365,26 +1366,53 @@ function makeBubble(role, text){
 function bubbleSetText(b, text){ const s=b.querySelector(".btext"); if(s) s.textContent=text; }
 
 let thinkStart=0, thinkTimer=null, reasoningActive=false, searchingActive=false, firstTurnDone=false;
+let webLabel="", _lastThinkText="";   // live web-activity narration ("searching…", "found …")
 function paintThinking(){
   const secs=Math.floor((Date.now()-thinkStart)/1000);
   // the very first reply loads the model into memory — much slower than the
   // rest, so name it "warming up" instead of a "thinking…" that looks stuck
-  const word = !firstTurnDone ? "warming up the model"
-             : searchingActive ? "checking the web"
+  const word = searchingActive ? (webLabel||"checking the web")
+             : !firstTurnDone ? "warming up the model"
              : reasoningActive ? "reasoning" : "thinking";
   // show the elapsed count only after 2s, so quick turns don't flicker a timer
-  statusEl.textContent = word + "…" + (secs>=2 ? " · "+secs+"s" : "");
+  const txt = word + "…" + (secs>=2 ? " · "+secs+"s" : "");
+  if(txt===_lastThinkText) return;
+  // a stage change (searching → found → summarizing) fades in; the seconds
+  // counter just updates in place
+  const stageChanged = txt.split("…")[0] !== _lastThinkText.split("…")[0];
+  _lastThinkText=txt;
+  if(stageChanged){
+    statusEl.style.opacity="0";
+    setTimeout(()=>{ statusEl.textContent=txt; statusEl.style.opacity="1"; }, 160);
+  } else statusEl.textContent=txt;
 }
 function startThinkClock(){
-  reasoningActive=false; searchingActive=false; thinkStart=Date.now();
+  reasoningActive=false; searchingActive=false; webLabel=""; _lastThinkText="";
+  thinkStart=Date.now();
   clearInterval(thinkTimer); paintThinking();
   thinkTimer=setInterval(paintThinking, 500);
 }
 function stopThinkClock(){ clearInterval(thinkTimer); thinkTimer=null; }
 function markReasoning(){ reasoningActive=true; searchingActive=false; if(thinkTimer) paintThinking(); }
-function markSearching(){ searchingActive=true; if(thinkTimer) paintThinking(); }
+function markSearching(label){
+  searchingActive=true; webLabel=label||"checking the web";
+  if(thinkTimer) paintThinking();
+  drawerPendingStatus(webLabel);   // mirror the activity inside the chat bubble
+}
+/* small italic activity line inside the pending reply bubble (Hermes-style) */
+function drawerPendingStatus(label){
+  if(!drawerPending) return;
+  let el=drawerPending.querySelector(".pweb");
+  if(!el){
+    el=document.createElement("div"); el.className="pweb";
+    drawerPending.querySelector(".btext").appendChild(el);
+  }
+  el.textContent=label+"…";
+  pastChatsDrawerBody.scrollTop=pastChatsDrawerBody.scrollHeight;
+}
 function setState(s){
   state=s;
+  statusEl.style.opacity="1";   // undo any mid-fade from the web-activity swap
   orbStage.classList.remove("state-listening","state-thinking","state-speaking");
   if(s!=="idle") orbStage.classList.add("state-"+s);
   document.body.classList.toggle("state-thinking-dots", s==="thinking");
@@ -2306,7 +2334,7 @@ async function streamChat(text, {speak, onToken, onAudio, onDone, onError, onRea
       if(m.type==="token") onToken&&onToken(m.text);
       else if(m.type==="audio") onAudio&&onAudio(m.audio);
       else if(m.type==="reasoning") onReasoning&&onReasoning();
-      else if(m.type==="searching") onSearching&&onSearching();
+      else if(m.type==="web"||m.type==="searching") onSearching&&onSearching(m.label);
       else if(m.type==="done") onDone&&onDone(m);
       else if(m.type==="error") onError&&onError(new Error(m.error||"error"));
     }
@@ -2330,7 +2358,7 @@ async function sendCallChat(){
   await streamChat(text, {
     speak,
     onReasoning:()=>{ markReasoning(); },
-    onSearching:()=>{ markSearching(); },
+    onSearching:(label)=>{ markSearching(label); },
     onToken:(t)=>{ acc+=t; if(!speak) showCaption(acc, "assistant"); },
     onAudio:(b64)=>{ gotAudio=true; enqueueChunk(b64); },
     onDone:(m)=>{ streamDone=true; currentSessionId=m.session||currentSessionId;
@@ -2368,7 +2396,7 @@ async function sendUtterance(wav){
           drawerAppendUserPending(lastUserText);   // your line + "finishing" dots
         }
         else if(msg.type==="reasoning"){ markReasoning(); }
-        else if(msg.type==="searching"){ markSearching(); }
+        else if(msg.type==="web"||msg.type==="searching"){ markSearching(msg.label); }
         else if(msg.type==="audio"){ gotAudio=true; await enqueueChunk(msg.audio); }
         else if(msg.type==="done"){
           currentSessionId=msg.session||currentSessionId;
