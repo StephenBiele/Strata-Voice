@@ -2,11 +2,11 @@
 
 Serves a single-page front-end (index.html), the streaming turn endpoints,
 and a small API for past chats, memories, and reference documents. The
-browser captures mic audio (hold the orb to talk, or hands-free via the
+browser captures mic audio hands-free (speech start/stop detected via the
 Silero VAD channel on :VAD_PORT), encodes a 16 kHz WAV in-page, and POSTs
 it to /turn/stream. Pipeline: Parakeet (ASR) -> LLM (Ollama or any
-OpenAI-compatible API) -> Kokoro (TTS), backed by Strata Memory; the reply
-streams back as NDJSON with per-sentence audio chunks.
+OpenAI-compatible API) -> Kokoro or Chatterbox (TTS), backed by Strata
+Memory; the reply streams back as NDJSON with per-sentence audio chunks.
 
 The main server is single-threaded on purpose — MLX's Metal GPU stream
 lives in the thread that loaded the models (this one). Anything slow and
@@ -1852,7 +1852,7 @@ def main() -> int:
     url = f"http://{HOST}:{PORT}"
     print(f"\n  ✦ {ASSISTANT_NAME} is listening at {url}")
     print(f"    · hands-free VAD on :{VAD_PORT}")
-    print("    Open it in your browser, click Start, then hold the orb (or button) to talk.\n")
+    print("    Open it in your browser, click Start conversation, and just talk.\n")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

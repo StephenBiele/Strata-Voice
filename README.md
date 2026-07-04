@@ -4,7 +4,7 @@
 
 **A voice assistant that actually remembers you.**
 
-Push-to-talk or hands-free. On-device speech. Real, tiered memory.
+Hands-free conversation. On-device speech. Real, tiered memory.
 Runs entirely on your Mac — nothing leaves your machine.
 
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-black)](#install)
@@ -57,9 +57,7 @@ Ollama starts if needed, the server launches, and your browser opens to
 
 > **Requirements:** macOS on Apple Silicon (M1 or newer). Non-interactive installs:
 > `./install.sh --light` or `./install.sh --recommended`. Re-running the installer is
-> always safe — it never touches an existing profile or memories. While the repos are
-> private, installing needs GitHub access to `strata-memory`; once public, the commands
-> above just work.
+> always safe — it never touches an existing profile or memories.
 
 ## Features
 
@@ -72,11 +70,10 @@ a debug switch adds an **in-call live tuning panel** so you can dial it in while
 talking. Barge-in leans on your browser's echo cancellation: if it interrupts itself
 through speakers, use headphones.
 
-**Manual turns** — prefer push-to-talk? Flip "Manual turns" in the conversation menu (or
-Settings) and it waits until you release before thinking: press & hold the orb or the
-button to speak, and the mic opens *only while you hold*. One mode's controls at a time —
-live shows the mute button, manual shows the hold button, never both. Ending a
-conversation keeps you on the call page — one tap starts the next.
+**Don't want it listening? Mute or type** — the mute button pauses the conversation
+(and the call timer) and hands the mic back to the OS entirely; typing while muted
+gets a text reply, typing while live gets a spoken one. Ending a conversation keeps
+you on the call page — one tap starts the next.
 
 **Real memory** — nothing is stored verbatim from a voice transcript. A smoothing layer
 rewrites explicit "remember…" requests into clean third-person facts, a background
