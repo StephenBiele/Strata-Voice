@@ -58,6 +58,19 @@ Then:
 ./start.sh
 ```
 
+Prefer a real Mac app over a browser tab? Build one once:
+
+```sh
+./make_app.sh && open "Strata Voice.app"
+```
+
+That creates **Strata Voice.app** — a native window (WKWebView) with its own Dock
+icon that starts Ollama and the server for you, and only shuts down what it
+started. Drag it to the Dock or copy it to /Applications; if you move the repo,
+run `./make_app.sh` again. macOS will ask for microphone access on first talk.
+
+Otherwise, the classic way:
+
 Ollama starts if needed, the server launches, and your browser opens to
 **http://localhost:8765**. Click **Start conversation**, allow the microphone, and
 **just start talking** — it hears when you speak.
