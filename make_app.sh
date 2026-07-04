@@ -38,10 +38,27 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# macOS reads app identity (name, icon, the NSMicrophoneUsageDescription that
+# makes the mic prompt possible) from the bundle of the RUNNING EXECUTABLE.
+# exec'ing the venv python from a script leaves identity with Python.app and
+# WKWebView denies the mic without ever prompting — so copy the real
+# interpreter INSIDE the bundle and point it at the venv via PYTHONPATH.
+PYHOME="$(.venv/bin/python -c 'import sys;print(sys.base_prefix)')"
+PYVER="$(.venv/bin/python -c 'import sys;print("python%d.%d"%sys.version_info[:2])')"
+# framework builds ship a stub that re-execs Resources/Python.app/…/Python —
+# copy that FINAL binary or the re-exec hands identity back to Python.app
+PYBIN="$PYHOME/Resources/Python.app/Contents/MacOS/Python"
+[ -f "$PYBIN" ] || PYBIN="$(.venv/bin/python -c 'import os,sys;print(os.path.realpath(sys.executable))')"
+cp "$PYBIN" "$APP/Contents/MacOS/python"
+chmod +x "$APP/Contents/MacOS/python"
+
 cat > "$APP/Contents/MacOS/StrataVoice" <<LAUNCH
 #!/bin/sh
+DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+export PYTHONHOME="$PYHOME"
+export PYTHONPATH="$REPO/.venv/lib/$PYVER/site-packages"
 cd "$REPO"
-exec "$REPO/.venv/bin/python" "$REPO/app.py"
+exec "\$DIR/python" "$REPO/app.py"
 LAUNCH
 chmod +x "$APP/Contents/MacOS/StrataVoice"
 

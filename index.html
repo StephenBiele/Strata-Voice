@@ -2309,7 +2309,7 @@ async function acquireMic(){
       // the chosen device is gone (unplugged?) — fall back to system default
       micStream = await navigator.mediaDevices.getUserMedia({audio: base});
     }
-  }catch(e){ alert("Microphone access is needed to talk. Please allow it in your browser."); return false; }
+  }catch(e){ alert("Microphone access is needed to talk. Allow it for this app in your browser's site permissions — or, in the Mac app, System Settings → Privacy & Security → Microphone."); return false; }
   micSource = ac.createMediaStreamSource(micStream);
   micAnalyser = ac.createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=.75;
   micSource.connect(micAnalyser);
