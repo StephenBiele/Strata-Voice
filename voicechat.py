@@ -235,6 +235,79 @@ EMOTION_PROMPT = (
 )
 
 
+# ---- Web search (optional, off by default) -----------------------------------
+# The free, keyless path: the `ddgs` package (DuckDuckGo). Search returns snippet
+# metadata only — titles + descriptions are enough for spoken one-liners, and
+# nobody wants a webpage read aloud. Results live in the server's memory for a
+# few minutes (never on disk) so follow-ups can dig into the same data.
+
+def web_search(query: str, limit: int = 5) -> list[dict]:
+    """One keyless DuckDuckGo search. Returns [{title, url, description}]; an
+    empty list on any failure — a broken search should never break the turn."""
+    try:
+        from ddgs import DDGS
+        out = []
+        with DDGS(timeout=8) as client:
+            for i, hit in enumerate(client.text(query, max_results=limit)):
+                if i >= limit:
+                    break
+                out.append({"title": str(hit.get("title", ""))[:120],
+                            "url": str(hit.get("href") or hit.get("url") or ""),
+                            "description": str(hit.get("body", ""))[:300]})
+        return out
+    except Exception as e:
+        print(f"[web] search failed ({e}): {query!r}")
+        return []
+
+
+_WEB_GATE_PROMPT = """You decide whether answering the user's LATEST message needs a live web search.
+ALWAYS search when the user explicitly asks to check, look up, verify, or google \
+something online — no matter the topic. Also search when the answer needs fresh or \
+checkable outside facts: current events, sports scores, store hours, prices, weather, \
+release dates, "is that true?" / "double check that" (verify the assistant's previous \
+claim against the web), or anything time-sensitive.
+Do NOT search for: chit-chat, opinions, memories about the user, or anything the \
+conversation itself already answers — unless the user explicitly asked to check online.
+
+Reply with ONLY a JSON array. If a search is needed: one short search-engine query, \
+e.g. ["home depot store hours today"]. If the user is questioning a previous claim, \
+build the query from that claim. If no search is needed: [].
+
+Recent conversation:
+{context}
+
+User's latest message: {text}"""
+
+
+def web_gate(text: str, recent_turns: list[dict] | None, cfg: dict | None = None,
+             place: str = "") -> str | None:
+    """Quick pre-turn check: does this turn want a web search? Returns a search
+    query or None. Runs at temperature 0 on the memory model; sees recent turns
+    so "can you double check that?" resolves against the previous claim.
+    `place` (the profile location) grounds local queries — weather, store
+    hours — instead of the model inventing a [location] placeholder."""
+    ctx = "\n".join(f"{t['role']}: {t['content'][:200]}" for t in (recent_turns or [])[-6:]) or "(start of conversation)"
+    if place:
+        ctx = f"(user's location: {place})\n" + ctx
+    try:
+        raw = llm_complete([{"role": "user", "content":
+                             _WEB_GATE_PROMPT.format(context=ctx, text=text)}],
+                           _mem_cfg(cfg))
+    except Exception as e:
+        print(f"[web] gate failed ({e})")
+        return None
+    m = _first_json_array(raw)
+    if not m:
+        return None
+    try:
+        arr = json.loads(m)
+    except Exception:
+        return None
+    if arr and isinstance(arr[0], str) and arr[0].strip():
+        return arr[0].strip()[:200]
+    return None
+
+
 # ---- ASR ---------------------------------------------------------------------
 class _ASR:
     """Thin wrapper so call sites use `asr.transcribe(path).text` — mlx-audio's
@@ -271,7 +344,8 @@ def _now_context() -> str:
 
 def build_messages(history, memories, documents=None, profile=None,
                    persona: str | None = None, recent=None,
-                   forgotten=None, emotion: bool = False) -> list[dict]:
+                   forgotten=None, emotion: bool = False,
+                   web: str | None = None) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
 
     `persona` is the user-editable part; the fixed MEMORY_DIRECTIVES are
@@ -303,6 +377,14 @@ def build_messages(history, memories, documents=None, profile=None,
             "\n\nREFERENCE DOCUMENTS the user shared (e.g. a resume or profile). "
             "Use them to answer questions accurately; quote only short snippets, "
             "never read a whole document aloud:\n" + joined
+        )
+    if web:
+        system += (
+            "\n\nWEB RESULTS (fetched moments ago; they expire in a few minutes):\n" + web +
+            "\nAnswer from these results in ONE or TWO short spoken sentences — just the "
+            "answer, never URLs or lists read aloud. If they don't contain the answer, say "
+            "you couldn't find it rather than guessing. If the user asks for more detail, "
+            "draw deeper on these same results."
         )
     system += "\n\n" + MEMORY_DIRECTIVES
     system += "\n\n" + RECALL_GUARD

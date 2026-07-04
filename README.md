@@ -98,6 +98,14 @@ text share one session, one memory, one timeline.
 **Incognito** — a ghost toggle for off-the-record conversations: nothing is saved, while
 it still uses what it already knows.
 
+**Web lookups (optional, off by default)** — flip one switch and it can check the web
+when a question actually needs it: scores, store hours, weather, or "can you double
+check that?" (it verifies its own previous claim). A quick pre-check decides whether to
+search, answers stay to a sentence or two, and results live in memory for five minutes
+for follow-ups, then vanish — web content never touches the transcript or your
+memories. Searches go to DuckDuckGo (no API key), which is why it's opt-in: those
+queries leave your machine.
+
 **Reference files** — upload a PDF / DOCX / text file (a resume, notes, a story) and ask
 about it. Small files are given to the model whole; larger ones are chunked and embedded, so
 each question pulls in only the passages relevant to what you asked instead of blowing the

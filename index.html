@@ -1132,6 +1132,15 @@
       <p class="hint" style="margin:-.4rem 0 1rem">Memory works with the built-in model or any OpenAI-compatible endpoint, using any provider, hosted locally or on another machine on your network. Saving facts, recall, recaps, and end-of-call review all run through it.</p>
       <div id="setModel"></div>
 
+      <h3 class="subhead">Web</h3>
+      <div class="switchrow">
+        <div>
+          <div class="switchlabel">Look things up online</div>
+          <div class="switchsub">Lets it search the web when a question needs fresh info: scores, store hours, news, or "can you double check that?". Searches go to DuckDuckGo, so those queries leave your machine. Results stay in memory for 5 minutes, then they're discarded — never saved.</div>
+        </div>
+        <button class="switch" id="set_websearch" role="switch" aria-checked="false"><span class="knob"></span></button>
+      </div>
+
       <h3 class="subhead adv">Model controls</h3>
       <p class="hint adv" style="margin:-.4rem 0 1rem">Generation settings passed to the model each turn.</p>
       <div class="field adv">
@@ -1355,23 +1364,25 @@ function makeBubble(role, text){
 }
 function bubbleSetText(b, text){ const s=b.querySelector(".btext"); if(s) s.textContent=text; }
 
-let thinkStart=0, thinkTimer=null, reasoningActive=false, firstTurnDone=false;
+let thinkStart=0, thinkTimer=null, reasoningActive=false, searchingActive=false, firstTurnDone=false;
 function paintThinking(){
   const secs=Math.floor((Date.now()-thinkStart)/1000);
   // the very first reply loads the model into memory — much slower than the
   // rest, so name it "warming up" instead of a "thinking…" that looks stuck
   const word = !firstTurnDone ? "warming up the model"
+             : searchingActive ? "checking the web"
              : reasoningActive ? "reasoning" : "thinking";
   // show the elapsed count only after 2s, so quick turns don't flicker a timer
   statusEl.textContent = word + "…" + (secs>=2 ? " · "+secs+"s" : "");
 }
 function startThinkClock(){
-  reasoningActive=false; thinkStart=Date.now();
+  reasoningActive=false; searchingActive=false; thinkStart=Date.now();
   clearInterval(thinkTimer); paintThinking();
   thinkTimer=setInterval(paintThinking, 500);
 }
 function stopThinkClock(){ clearInterval(thinkTimer); thinkTimer=null; }
-function markReasoning(){ reasoningActive=true; if(thinkTimer) paintThinking(); }
+function markReasoning(){ reasoningActive=true; searchingActive=false; if(thinkTimer) paintThinking(); }
+function markSearching(){ searchingActive=true; if(thinkTimer) paintThinking(); }
 function setState(s){
   state=s;
   orbStage.classList.remove("state-listening","state-thinking","state-speaking");
@@ -1731,6 +1742,7 @@ async function loadSettings(){
   $("#set_name").value=s.assistant_name||"";
   $("#set_persona").value=s.persona||"";
   setSwitch($("#set_thinking"), !!s.thinking);
+  setSwitch($("#set_websearch"), !!s.web_search);
   // voice engine + expressive emotion
   $("#set_ttsengine").value=s.tts_engine||"kokoro";
   setSwitch($("#set_emotion"), s.tts_emotion!==false);
@@ -1903,6 +1915,7 @@ async function saveSettings(){
     assistant_name:$("#set_name").value.trim(),
     persona:$("#set_persona").value,
     thinking:$("#set_thinking").getAttribute("aria-checked")==="true",
+    web_search:$("#set_websearch").getAttribute("aria-checked")==="true",
     tts_engine:$("#set_ttsengine").value,
     tts_emotion:$("#set_emotion").getAttribute("aria-checked")==="true",
     tts_cb_voice:$("#set_cbvoice").value||"builtin",
@@ -2275,7 +2288,7 @@ function teardownAudioContext(){
   try{ if(ac) ac.close(); }catch(_){}
   ac=null;
 }
-async function streamChat(text, {speak, onToken, onAudio, onDone, onError, onReasoning}){
+async function streamChat(text, {speak, onToken, onAudio, onDone, onError, onReasoning, onSearching}){
   let r;
   try{ r=await fetch("/chat/stream",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({message:text, speak:!!speak, private:incognito})}); }
@@ -2293,6 +2306,7 @@ async function streamChat(text, {speak, onToken, onAudio, onDone, onError, onRea
       if(m.type==="token") onToken&&onToken(m.text);
       else if(m.type==="audio") onAudio&&onAudio(m.audio);
       else if(m.type==="reasoning") onReasoning&&onReasoning();
+      else if(m.type==="searching") onSearching&&onSearching();
       else if(m.type==="done") onDone&&onDone(m);
       else if(m.type==="error") onError&&onError(new Error(m.error||"error"));
     }
@@ -2316,6 +2330,7 @@ async function sendCallChat(){
   await streamChat(text, {
     speak,
     onReasoning:()=>{ markReasoning(); },
+    onSearching:()=>{ markSearching(); },
     onToken:(t)=>{ acc+=t; if(!speak) showCaption(acc, "assistant"); },
     onAudio:(b64)=>{ gotAudio=true; enqueueChunk(b64); },
     onDone:(m)=>{ streamDone=true; currentSessionId=m.session||currentSessionId;
@@ -2353,6 +2368,7 @@ async function sendUtterance(wav){
           drawerAppendUserPending(lastUserText);   // your line + "finishing" dots
         }
         else if(msg.type==="reasoning"){ markReasoning(); }
+        else if(msg.type==="searching"){ markSearching(); }
         else if(msg.type==="audio"){ gotAudio=true; await enqueueChunk(msg.audio); }
         else if(msg.type==="done"){
           currentSessionId=msg.session||currentSessionId;
@@ -2955,6 +2971,10 @@ advBtn.addEventListener("click", ()=>setAdvanced(advBtn.getAttribute("aria-press
 try{ if(localStorage.getItem("vc_advanced")==="1") setAdvanced(true); }catch(_){}
 $("#modelsetupSave").addEventListener("click", saveModelSetup);
 $("#set_thinking").addEventListener("click", (e)=>{
+  const on=e.currentTarget.getAttribute("aria-checked")==="true";
+  setSwitch(e.currentTarget, !on);
+});
+$("#set_websearch").addEventListener("click",(e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
   setSwitch(e.currentTarget, !on);
 });

@@ -157,6 +157,24 @@ short version; below it, the complete inventory.
 - **Editable persona** — rewrite the system prompt freely; memory instructions
   are always appended so memory keeps working.
 
+### Web lookups (optional)
+
+- **Off by default** — search queries leave your machine (DuckDuckGo, no API
+  key), so it's a deliberate opt-in with an honest explanation in Settings.
+- **Gated, not constant** — a quick pre-turn check decides whether the question
+  actually needs fresh info (scores, hours, weather, news); everyday
+  conversation never triggers a search.
+- **"Can you double check that?"** — questioning a previous claim makes it
+  verify that claim against the web.
+- **Location-aware queries** — "what's the weather tomorrow?" searches for your
+  profile location, not a placeholder.
+- **Voice-shaped answers** — one or two spoken sentences with just the answer;
+  it says when the results don't contain one instead of guessing.
+- **Five-minute working memory** — results stay in RAM for follow-ups ("tell me
+  more"), refresh while actively discussed, then vanish. Never written to disk,
+  never enters the transcript or long-term memory.
+- **"Checking the web…"** status in the call UI while it searches.
+
 ### Files & profile
 
 - **Reference files** — upload PDF / DOCX / text (a resume, notes, a story) and

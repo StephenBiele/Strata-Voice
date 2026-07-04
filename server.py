@@ -101,6 +101,10 @@ DEFAULT_SETTINGS = {
     # Memory jobs run behind the conversation, so a bigger, slower model can
     # write more accurate memories without touching voice latency.
     "memory_model": "",
+    # Web lookups (off by default: queries leave the machine, so it's opt-in).
+    # When on, a quick pre-turn check decides if the question needs fresh info;
+    # results live in memory for ~5 minutes and are never written to disk.
+    "web_search": False,
     # Hands-free (VAD): talk without holding; it detects speech start/stop
     "vad_enabled": True,                 # hands-free is the default talk mode
     "vad_barge_in": True,                # speaking while it talks interrupts it
@@ -119,7 +123,7 @@ SETTINGS_FIELDS = (
     "tts_voice", "tts_speed", "tts_engine", "tts_emotion", "tts_cb_voice",
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
-    "asr_model", "asr_backend", "mic_device", "memory_model",
+    "asr_model", "asr_backend", "mic_device", "memory_model", "web_search",
     "vad_enabled", "vad_barge_in", "vad_threshold", "vad_silence_ms",
     "vad_prefix_ms", "vad_min_speech_ms", "debug_settings",
 )
@@ -194,6 +198,54 @@ _asr_key = None     # (model, backend) currently loaded into _asr, for change de
 _tts = None
 _tts_engine = "kokoro"   # which engine is loaded into _tts, for change detection
 _strata = None
+
+# Ephemeral web-search results: in MEMORY only, never disk. Each entry lives
+# ~5 minutes so "tell me more" can dig into the same results without a fresh
+# search, then it's gone — web content never enters the transcript or memory.
+_web_cache: dict = {}          # normalized query -> {"t", "query", "results"}
+WEB_TTL_S = 300
+WEB_CACHE_MAX = 3              # keep only the last few searches
+
+
+def _web_remember(query: str, results: list) -> None:
+    _web_cache[query.lower().strip()] = {"t": time.time(), "query": query,
+                                         "results": results}
+    while len(_web_cache) > WEB_CACHE_MAX:            # oldest out first
+        oldest = min(_web_cache, key=lambda k: _web_cache[k]["t"])
+        del _web_cache[oldest]
+
+
+def _web_fresh_match(query: str):
+    """A still-fresh cache entry asking essentially the same thing, or None.
+    The gate rephrases repeats ("store hours today" vs "close today"), so exact
+    match isn't enough — word-set overlap catches same-ground queries while
+    staying below the level where genuinely new questions would false-match."""
+    now = time.time()
+    words = set(re.findall(r"[a-z0-9]+", query.lower()))
+    if not words:
+        return None
+    for k, e in _web_cache.items():
+        if now - e["t"] > WEB_TTL_S:
+            continue
+        kw = set(re.findall(r"[a-z0-9]+", k))
+        if kw and len(words & kw) / len(words | kw) >= 0.55:
+            return e
+    return None
+
+
+def _web_block() -> str | None:
+    """Still-fresh search results as a prompt block, purging expired entries."""
+    now = time.time()
+    for k in [k for k, e in _web_cache.items() if now - e["t"] > WEB_TTL_S]:
+        del _web_cache[k]
+    if not _web_cache:
+        return None
+    parts = []
+    for e in sorted(_web_cache.values(), key=lambda e: e["t"]):
+        lines = "\n".join(f"- {r['title']}: {r['description']} ({r['url']})"
+                          for r in e["results"])
+        parts.append(f"Search \"{e['query']}\":\n{lines}")
+    return "\n\n".join(parts)
 _embedder = None    # real embedding model if available, else None (dump-all recall)
 _lock = threading.Lock()
 
@@ -1250,6 +1302,30 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     mem = vc.list_memories(_strata)
     mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None, mems=mem)
     recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
+    # Web lookup (opt-in): a quick gate decides if this turn needs fresh info
+    # ("double check that", store hours, scores…). New results join the
+    # short-lived cache; anything still fresh is injected either way so
+    # follow-ups keep digging into the same data without a re-search.
+    web_ctx = None
+    if s.get("web_search"):
+        query = vc.web_gate(text, _history[-6:], _mem_llm_cfg(),
+                            place=_read_json(PROFILE_FILE, {}).get("location", ""))
+        if query:
+            cached = _web_fresh_match(query)
+            if cached:
+                # actively being asked about — reuse and keep alive, no re-fetch
+                cached["t"] = time.time()
+                print(f"[web] reusing cached results for {query!r}")
+            else:
+                yield {"type": "searching", "query": query}
+                results = vc.web_search(query)
+                if results:
+                    _web_remember(query, results)
+                    print(f"[web] {len(results)} results for {query!r}")
+                else:
+                    print(f"[web] no results for {query!r}")
+        web_ctx = _web_block()
+
     voice, speed = s["tts_voice"], float(s["tts_speed"])
     if speak and _tts_engine == "chatterbox":
         _cb_select_voice(s.get("tts_cb_voice") or "builtin")   # one-time per voice
@@ -1273,6 +1349,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         _history[-40:], mem_text,
         documents=_doc_context(text), profile=_profile_context(), persona=s["persona"],
         recent=recent, forgotten=_forgotten, emotion=_emotion_active() and speak,
+        web=web_ctx,
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
