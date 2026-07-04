@@ -7,6 +7,10 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="alternate icon" href="/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#EDEFE2">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,340;9..144,440;9..144,560&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1599,6 +1603,7 @@ async function start(textMode=false){
   showView("call");
   muted=false; timerPausedAt=null;   // reset before the mode decision below
   callStart=Date.now(); timerInt=setInterval(tickTimer,1000); tickTimer();
+  requestWakeLock();   // phones: keep the screen on mid-conversation
   setState("idle"); levelLoop();
   // pull the VAD tuning either way (used the moment voice is enabled)
   try{
@@ -1634,6 +1639,7 @@ function end(){
   releaseMic();
   teardownAudioContext();   // closes the playback context (releaseMic freed the mic above)
   clearInterval(timerInt);
+  releaseWakeLock();
   started=false; busy=false;
   if(muted) setMuted(false);
   fetch("/end",{method:"POST"}).catch(()=>{});
@@ -2575,6 +2581,19 @@ function levelLoop(){
   document.documentElement.style.setProperty("--level", _lvlSmooth.toFixed(3));
   requestAnimationFrame(levelLoop);
 }
+/* Screen wake lock: a phone that locks its screen suspends the tab and the
+   conversation dies mid-sentence. Held only while a call is active; the OS
+   silently releases it when the tab hides, so we re-request on return. */
+let _wakeLock=null;
+async function requestWakeLock(){
+  try{ if("wakeLock" in navigator) _wakeLock=await navigator.wakeLock.request("screen"); }catch(_){}
+}
+function releaseWakeLock(){
+  try{ if(_wakeLock){ _wakeLock.release(); _wakeLock=null; } }catch(_){}
+}
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState==="visible" && started && !_wakeLock) requestWakeLock();
+});
 document.addEventListener("visibilitychange", ()=>{
   if(document.visibilityState==="visible" && started) levelLoop();
 });
@@ -2745,8 +2764,14 @@ async function armHandsFree(){
   ensureAudio();
   statusEl.textContent="getting ready…";
   if(!vadBase){
-    try{ const c=await (await fetch("/config")).json();
-         vadBase=`http://${location.hostname}:${c.vad_port||8766}`; }catch(_){}
+    // On HTTPS (remote access via Tailscale Serve) the VAD channel rides the
+    // same origin under /vadsvc — an https page can't call a plain-http port.
+    // Locally it keeps its own port so barge-in stays responsive mid-turn.
+    if(location.protocol==="https:"){ vadBase="/vadsvc"; }
+    else{
+      try{ const c=await (await fetch("/config")).json();
+           vadBase=`http://${location.hostname}:${c.vad_port||8766}`; }catch(_){}
+    }
   }
   if(!micStream){
     const ok=await acquireMic();

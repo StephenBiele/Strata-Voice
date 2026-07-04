@@ -923,6 +923,13 @@ class VadHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         global _vad_model, _vad_sv
         u = urlparse(self.path)
+        # Remote access (Tailscale Serve) mounts this server under /vadsvc on the
+        # main HTTPS origin; accept the prefixed form whether or not the proxy
+        # strips the mount path.
+        path = u.path
+        if path.startswith("/vadsvc/"):
+            path = path[len("/vadsvc"):]
+        u = u._replace(path=path)
         try:
             if u.path == "/vad/start":
                 body = json.loads(self._body() or b"{}")
@@ -1676,6 +1683,27 @@ class Handler(BaseHTTPRequestHandler):
             html = (HERE / "index.html").read_text(encoding="utf-8")
             html = html.replace("{{ASSISTANT_NAME}}", _settings()["assistant_name"])
             return self._send(200, html, "text/html; charset=utf-8")
+        if u.path == "/manifest.json":
+            # PWA manifest: lets a phone "Add to Home Screen" as a real
+            # standalone app (used with remote access — see docs/REMOTE-ACCESS.md)
+            man = {
+                "name": "Strata Voice", "short_name": "Strata",
+                "description": "A voice assistant that actually remembers you.",
+                "start_url": "/", "display": "standalone",
+                "background_color": "#EDEFE2", "theme_color": "#EDEFE2",
+                "icons": [
+                    {"src": "/icons/icon-192.png", "sizes": "192x192",
+                     "type": "image/png", "purpose": "any maskable"},
+                    {"src": "/icons/icon-512.png", "sizes": "512x512",
+                     "type": "image/png", "purpose": "any maskable"},
+                ],
+            }
+            return self._send(200, json.dumps(man), "application/manifest+json")
+        if u.path in ("/icons/icon-192.png", "/icons/icon-512.png"):
+            p = HERE / "icons" / Path(u.path).name
+            if not p.exists():
+                return self._json(404, {"ok": False, "error": "not found"})
+            return self._send(200, p.read_bytes(), "image/png")
         if u.path in ("/favicon.svg", "/favicon.ico", "/favicon.png",
                       "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"):
             # app icon (icons/): SVG for modern browsers, PNGs as fallbacks

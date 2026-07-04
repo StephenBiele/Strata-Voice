@@ -167,6 +167,12 @@ the transcript or your memories.
 changes, and one button pulls the update, refreshes components and the Mac app,
 and restarts — no terminal, no visiting the repo.
 
+**Use it from your phone** — `./remote.sh on` shares it privately over
+[Tailscale](https://tailscale.com): open the printed URL on your phone, add it
+to the home screen, and talk from anywhere — the Mac does all the work, and
+nothing touches the public internet. See
+[docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md).
+
 **A living, responsive UI** — a calm call interface with an orb that breathes, ripples,
 and blooms; adapts from desktop to phone (panels slide, the conversation becomes a
 bottom sheet).
