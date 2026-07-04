@@ -1341,7 +1341,11 @@ const callComposer=$("#callComposer"), callComposerHome=callComposer.parentNode,
 let drawerView="current";   // "current" (live) | "history" (browse past chats)
 let incognito=false;        // when on, the conversation isn't saved or remembered
 
-let ac, micStream, micSource, micAnalyser, capNode, micToken=0;
+// Two audio contexts on purpose: `ac` is playback-only and lives for the whole
+// call; `micAC` exists only while the mic is open. Safari releases the mic to
+// other apps (Discord) only when its context CLOSES — scoping that to a capture
+// context lets mute hand the mic back without cutting off a reply mid-sentence.
+let ac, micAC, micStream, micSource, micAnalyser, capNode, micToken=0;
 let playAnalyser=null;
 let busy=false, started=false;
 let state="idle";         // idle | listening | thinking | speaking
@@ -1622,7 +1626,7 @@ function end(){
   disarmHandsFree();              // stop feeding + /vad/stop
   if(turnAbort){ try{ turnAbort.abort(); }catch(_){} }
   releaseMic();
-  teardownAudioContext();   // closes ac + clears analysers (frees the mic for other apps)
+  teardownAudioContext();   // closes the playback context (releaseMic freed the mic above)
   clearInterval(timerInt);
   started=false; busy=false;
   if(muted) setMuted(false);
@@ -2310,23 +2314,28 @@ async function acquireMic(){
       micStream = await navigator.mediaDevices.getUserMedia({audio: base});
     }
   }catch(e){ alert("Microphone access is needed to talk. Allow it for this app in your browser's site permissions — or, in the Mac app, System Settings → Privacy & Security → Microphone."); return false; }
-  micSource = ac.createMediaStreamSource(micStream);
-  micAnalyser = ac.createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=.75;
+  micAC = new (window.AudioContext||window.webkitAudioContext)();   // capture-only context
+  if(micAC.state==="suspended") micAC.resume();
+  micSource = micAC.createMediaStreamSource(micStream);
+  micAnalyser = micAC.createAnalyser(); micAnalyser.fftSize=1024; micAnalyser.smoothingTimeConstant=.75;
   micSource.connect(micAnalyser);
-  capNode = ac.createScriptProcessor(4096,1,1);
+  capNode = micAC.createScriptProcessor(4096,1,1);
   capNode.onaudioprocess = (e)=>{
     if(handsFree && started) hfCapture(new Float32Array(e.inputBuffer.getChannelData(0)));
   };
-  micSource.connect(capNode); capNode.connect(ac.destination); // silent output; keeps the node processing
+  micSource.connect(capNode); capNode.connect(micAC.destination); // silent output; keeps the node processing
   return true;
 }
 // Fully release the mic device so the OS indicator turns off between utterances.
+// Closing micAC is what actually hands the device back on Safari — and because
+// playback lives on its own context, a reply in progress keeps talking.
 function releaseMic(){
   try{ if(capNode){ capNode.onaudioprocess=null; capNode.disconnect(); } }catch(_){}
   try{ if(micSource) micSource.disconnect(); }catch(_){}
   try{ if(micAnalyser) micAnalyser.disconnect(); }catch(_){}
   try{ if(micStream) micStream.getTracks().forEach(t=>t.stop()); }catch(_){}
-  capNode=micSource=micAnalyser=micStream=null;
+  try{ if(micAC) micAC.close(); }catch(_){}
+  capNode=micSource=micAnalyser=micStream=null; micAC=null;
 }
 /* ---------- streaming playback (gapless chunk queue) ---------- */
 let streamAnalyser=null, nextStartTime=0, activeSources=[], streamDone=false;
@@ -2344,7 +2353,7 @@ function stopPlayback(){
 }
 async function enqueueChunk(b64){
   firstTurnDone=true;   // a reply is arriving → the model is warm now
-  if(!ac) return;       // context was torn down (muted) — nothing to play into
+  if(!ac) return;       // no playback context (call not started / ended)
   const ep=playbackEpoch;
   const bytes=Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
   let buf; try{ buf=await ac.decodeAudioData(bytes.buffer); }catch(_){ return; }
@@ -2370,10 +2379,9 @@ function ensureAudio(){
   if(!ac) ac = new (window.AudioContext||window.webkitAudioContext)();
   if(ac.state==="suspended") ac.resume();
 }
-// Safari holds the microphone (and the audio session) until the AudioContext is
-// CLOSED — stopping the track isn't enough — which locks other apps (e.g. Discord
-// while screen-sharing) out of the mic. Closing it hands the device back;
-// ensureAudio() rebuilds a fresh context when voice is next needed.
+// End-of-call cleanup for the PLAYBACK context (the mic's capture context is
+// closed by releaseMic — that's what hands the device back to other apps).
+// ensureAudio() rebuilds a fresh playback context when voice is next needed.
 function teardownAudioContext(){
   stopPlayback();
   try{ if(streamAnalyser) streamAnalyser.disconnect(); }catch(_){}
@@ -2662,7 +2670,7 @@ async function vadStartSession(){
     // fresh detector = fresh clock: reset everything that maps ms ↔ samples
     vadRing=new Float32Array(VAD_RING_LEN); ringAbs=0; sentAbs=0;
     feedChunks=[]; feedLen=0; pendingStartMs=null;
-    hfDecim=makeDecimator((ac&&ac.sampleRate)||48000, 16000);
+    hfDecim=makeDecimator((micAC&&micAC.sampleRate)||(ac&&ac.sampleRate)||48000, 16000);
     return true;
   }catch(_){ return false; }
 }
@@ -2720,19 +2728,19 @@ function setMuted(on){
   call.classList.toggle("muted", on);   // orb goes still + dim: "it cannot hear me"
   if(on){
     pendingStartMs=null;               // drop any half-heard utterance
-    releaseMic();                      // OS mic light off
-    // Close the audio context so Safari actually hands the mic back to the OS /
-    // other apps (Discord). Any in-progress spoken reply stops with it.
-    teardownAudioContext();
+    // Releases the mic fully (its own context closes → OS light off, Discord
+    // gets the device back) while playback keeps going: muting means "stop
+    // hearing me", not "stop talking". A reply in progress finishes.
+    releaseMic();
     if(started && timerPausedAt==null) timerPausedAt=Date.now();   // muted = paused → freeze the call clock
-    setState("idle");
+    if(activeSources.length===0) setState("idle");   // still speaking? onended lands on idle
   }else{
     if(started && timerPausedAt!=null){   // resume the clock where it left off
       callStart += Date.now()-timerPausedAt;
       timerPausedAt=null; tickTimer();
     }
-    // unmute = turn voice on. Rebuild the audio context first (it was closed on
-    // mute), then arm voice if it was never armed, or re-open the mic if it was.
+    // unmute = turn voice on: arm voice if it was never armed, or re-open the
+    // mic if it was (acquireMic builds a fresh capture context).
     if(started){
       ensureAudio();
       if(!handsFree){ armHandsFree(); return; }   // armHandsFree owns the status
@@ -2977,7 +2985,7 @@ function vadLiveApply(){
         // detector was rebuilt (clock reset) — realign our sample counters
         vadRing=new Float32Array(VAD_RING_LEN); ringAbs=0; sentAbs=0;
         feedChunks=[]; feedLen=0; pendingStartMs=null;
-        hfDecim=makeDecimator((ac&&ac.sampleRate)||48000, 16000);
+        hfDecim=makeDecimator((micAC&&micAC.sampleRate)||(ac&&ac.sampleRate)||48000, 16000);
       }
     }catch(_){}
   }, 150);
