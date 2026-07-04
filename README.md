@@ -14,6 +14,12 @@ Runs entirely on your Mac — nothing leaves your machine.
 
 [Install](#install) · [Features](#features) · [How memory works](#how-memory-works) · [The models](#the-models) · [Configuration](#configuration) · [Uninstall](#uninstall)
 
+![Asking Strata Voice what it remembers — it recalls a birthday, a race, and an interview from past conversations](docs/media/demo.gif)
+
+| <img src="docs/media/call.png" alt="The call screen — a calm orb, hands-free"> | <img src="docs/media/memories.png" alt="The Memory hub — dated facts with tools to test and clean them"> | <img src="docs/media/settings.png" alt="Settings — plain language, lean by default"> |
+| :---: | :---: | :---: |
+| Just talk | Memory you can see | Settings in plain language |
+
 </div>
 
 ---
