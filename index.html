@@ -1244,6 +1244,12 @@
         <button class="switch" id="set_debug" role="switch" aria-checked="false"><span class="knob"></span></button>
       </div>
 
+      <h3 class="subhead">Updates</h3>
+      <p class="hint" style="margin:-.4rem 0 1rem">Version <span id="upd_ver">…</span></p>
+      <button class="ghostbtn" id="upd_check">Check for updates</button>
+      <div class="teststatus" id="upd_status"></div>
+      <div id="upd_list"></div>
+
       <button class="savebtn" id="settingsSave">Save settings</button>
       <div class="teststatus" id="set_savenote"></div>
     </div>
@@ -1885,6 +1891,61 @@ async function loadSettings(){
   // speech recognition (ASR) picker
   await loadAsrPicker(s);
   paintSliders();   // programmatic .value= doesn't fire input events — repaint fills
+  // current version (quiet, local — no network fetch until they ask)
+  try{ const v=await (await fetch("/update/status")).json();
+       $("#upd_ver").textContent=v.version||"unknown"; }catch(_){}
+}
+/* ---------- in-app updates (Settings → Updates) ---------- */
+async function checkUpdates(){
+  const st=$("#upd_status"), list=$("#upd_list"), btn=$("#upd_check");
+  btn.disabled=true; st.className="teststatus"; st.textContent="Checking…"; list.innerHTML="";
+  let d={}; try{ d=await (await fetch("/update/check",{method:"POST"})).json(); }catch(_){}
+  btn.disabled=false;
+  if(!d.ok){ st.className="teststatus err"; st.textContent=d.error||"Couldn't check — are you online?"; return; }
+  if(!d.count){ st.className="teststatus ok"; st.textContent="You're up to date ✓"; return; }
+  st.className="teststatus"; st.textContent="";
+  list.innerHTML=`<div class="rhead" style="margin-top:.4rem">What's new <span class="muted">${d.count} update${d.count===1?"":"s"}</span></div>`
+    + `<ul style="margin:.2rem 0 .8rem; padding-left:1.1rem">`
+    + d.changes.map(c=>`<li style="font-size:.88rem; color:var(--ink-soft)">${esc(c.title)}</li>`).join("")
+    + `</ul>`;
+  const go=document.createElement("button"); go.className="savebtn"; go.textContent="Update now";
+  const note=document.createElement("div"); note.className="hint"; note.style.marginTop=".4rem";
+  note.textContent="Takes under a minute. The app restarts at the end — an active conversation will end.";
+  list.append(go, note);
+  go.addEventListener("click", ()=>applyUpdate(go));
+}
+async function applyUpdate(btn){
+  const st=$("#upd_status");
+  btn.disabled=true; btn.textContent="Updating…";
+  st.className="teststatus busy"; st.textContent="Downloading the update…";
+  let restarting=false;
+  try{
+    const r=await fetch("/update/apply",{method:"POST"});
+    const reader=r.body.getReader(); const dec=new TextDecoder(); let buf="";
+    while(true){
+      const {done,value}=await reader.read();
+      if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let nl;
+      while((nl=buf.indexOf("\n"))>=0){
+        const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+        if(!line) continue;
+        let m; try{ m=JSON.parse(line); }catch(_){ continue; }
+        if(m.label) st.textContent=m.label;
+        if(m.done && !m.ok){ st.className="teststatus err"; st.textContent=m.error||"Update failed.";
+                             btn.disabled=false; btn.textContent="Update now"; return; }
+        if(m.done && m.restarting) restarting=true;
+      }
+    }
+  }catch(_){ /* connection drops when the server restarts — expected */ restarting=true; }
+  if(!restarting){ st.className="teststatus err"; st.textContent="Update didn't finish — try again."; return; }
+  st.className="teststatus busy"; st.textContent="Restarting… the models take a moment to reload.";
+  // poll until the new server answers, then load the new page
+  for(let i=0;i<180;i++){
+    await new Promise(r=>setTimeout(r,1500));
+    try{ const c=await fetch("/config",{cache:"no-store"}); if(c.ok){ location.reload(); return; } }catch(_){}
+  }
+  st.className="teststatus err"; st.textContent="The app didn't come back — start it again (open the Mac app or run ./start.sh).";
 }
 let _asrModels=null;
 async function loadAsrPicker(s){
@@ -3044,6 +3105,7 @@ $("#set_thinking").addEventListener("click", (e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
   setSwitch(e.currentTarget, !on);
 });
+$("#upd_check").addEventListener("click", checkUpdates);
 $("#set_websearch").addEventListener("click",(e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
   setSwitch(e.currentTarget, !on);

@@ -24,6 +24,8 @@ import json
 import logging
 import os
 import queue
+import subprocess
+import sys
 import re
 import threading
 import time
@@ -198,6 +200,35 @@ _asr_key = None     # (model, backend) currently loaded into _asr, for change de
 _tts = None
 _tts_engine = "kokoro"   # which engine is loaded into _tts, for change detection
 _strata = None
+
+# ---- self-update (Settings → Updates) -----------------------------------------
+# The app is a git checkout, so updating IS git: fetch to see what's new, pull
+# --ff-only to apply (never rewrites local changes), refresh deps, rebuild the
+# Mac app if one was built, then re-exec this process — same PID, so a
+# terminal, start.sh, or the Mac app's child bookkeeping all survive it.
+
+def _git(*args, timeout=30):
+    """Run git in the app folder. Returns (ok, output)."""
+    try:
+        r = subprocess.run(["git", *args], cwd=HERE, capture_output=True,
+                           text=True, timeout=timeout)
+        return r.returncode == 0, (r.stdout or r.stderr).strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def _update_version() -> dict:
+    ok, head = _git("log", "-1", "--format=%h · %cd", "--date=format:%b %e, %Y")
+    _, dirty = _git("status", "--porcelain")
+    return {"version": head if ok else "unknown", "dirty": bool(dirty)}
+
+
+def _restart_self() -> None:
+    """Replace this process with a fresh server (new code, same PID). Sockets
+    don't survive exec (PEP 446 non-inheritable), so the port comes free."""
+    print("[update] restarting…")
+    os.execv(sys.executable, [sys.executable, str(HERE / "server.py")])
+
 
 # Ephemeral web-search results: in MEMORY only, never disk. Each entry lives
 # ~5 minutes so "tell me more" can dig into the same results without a fresh
@@ -1660,6 +1691,8 @@ class Handler(BaseHTTPRequestHandler):
             mem = _bg["memory"] + _mem_jobs.qsize()
             return self._json(200, {"memory_jobs": mem, "recaps": _bg["recap"],
                                     "busy": bool(mem or _bg["recap"])})
+        if u.path == "/update/status":
+            return self._json(200, _update_version())
         if u.path == "/settings":
             s = _settings()
             out = {k: s[k] for k in SETTINGS_FIELDS}
@@ -1921,6 +1954,51 @@ class Handler(BaseHTTPRequestHandler):
             docs = [d for d in _read_json(DOCS_FILE, []) if d["id"] != did]
             _write_json(DOCS_FILE, docs)
             return self._json(200, {"ok": True})
+        if u.path == "/update/check":
+            # what's new upstream? fetch, then list commits we don't have
+            ok, out = _git("fetch", "origin", "main", timeout=25)
+            if not ok:
+                return self._json(200, {"ok": False, "error": f"couldn't reach the repo: {out}"})
+            _, lines = _git("rev-list", "--oneline", "HEAD..origin/main")
+            behind = [l.split(" ", 1) for l in lines.splitlines() if l.strip()]
+            return self._json(200, {"ok": True, "count": len(behind),
+                                    "changes": [{"sha": b[0], "title": (b[1] if len(b) > 1 else "")}
+                                                for b in behind[:20]],
+                                    **_update_version()})
+        if u.path == "/update/apply":
+            # streamed: pull → deps → Mac app → restart (NDJSON progress lines)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            def emit(obj):
+                self.wfile.write((json.dumps(obj) + "\n").encode()); self.wfile.flush()
+            emit({"step": "pull", "label": "Downloading the update…"})
+            ok, out = _git("pull", "--ff-only", "origin", "main", timeout=60)
+            if not ok:
+                emit({"done": True, "ok": False,
+                      "error": f"couldn't apply cleanly ({out}). If you've edited "
+                               "the app's files, update manually with git."})
+                return
+            emit({"step": "deps", "label": "Updating components…"})
+            try:
+                subprocess.run([str(HERE / ".venv/bin/pip"), "install", "-q",
+                                "-r", str(HERE / "requirements.txt")],
+                               cwd=HERE, capture_output=True, timeout=600)
+            except Exception as e:
+                print(f"[update] pip refresh failed: {e}")   # non-fatal; old deps still work
+            if (HERE / "Strata Voice.app").exists():
+                emit({"step": "app", "label": "Refreshing the Mac app…"})
+                try:
+                    subprocess.run(["/bin/sh", str(HERE / "make_app.sh")], cwd=HERE,
+                                   capture_output=True, timeout=120,
+                                   stdin=subprocess.DEVNULL)   # no tty → prompts default to skip
+                except Exception as e:
+                    print(f"[update] app rebuild failed: {e}")
+            emit({"done": True, "ok": True, "restarting": True,
+                  "label": "Restarting with the new version…"})
+            threading.Timer(0.8, _restart_self).start()
+            return
         if u.path == "/memory/polish":
             # Propose-only smoothing pass (Memories page button). The LLM drafts
             # cleanups off-lock; NOTHING is applied here — the user reviews each

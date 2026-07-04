@@ -191,6 +191,16 @@ short version; below it, the complete inventory.
   greets and refers to you correctly.
 - **Onboarding** — a gentle first-run flow for profile and model setup.
 
+### Updates
+
+- **In-app updates** — Settings → Updates shows your version, checks what's new
+  (with the list of changes), and updates in one click: pulls the latest,
+  refreshes dependencies, rebuilds the Mac app if you have one, restarts itself,
+  and the page reconnects when it's back.
+- **Safe by design** — the update applies only if it merges cleanly
+  (`--ff-only`); local edits are never overwritten, and a failure keeps the
+  running version.
+
 ### Settings & polish
 
 - **Advanced-mode gear** — settings show just the essentials by default; one

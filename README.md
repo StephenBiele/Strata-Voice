@@ -163,6 +163,10 @@ audio clip and it speaks in that voice. Kokoro stays the default: faster, many
 voices, neutral. Emotion tags are a spoken performance only — they never appear in
 the transcript or your memories.
 
+**Updates itself** — Settings → Updates checks what's new, shows the list of
+changes, and one button pulls the update, refreshes components and the Mac app,
+and restarts — no terminal, no visiting the repo.
+
 **A living, responsive UI** — a calm call interface with an orb that breathes, ripples,
 and blooms; adapts from desktop to phone (panels slide, the conversation becomes a
 bottom sheet).
