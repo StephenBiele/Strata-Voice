@@ -75,12 +75,13 @@ How it behaves:
   server you launched yourself (say, `./start.sh` in a terminal) is left alone
   and keeps running in the background. A stray background server can always be
   stopped with `lsof -ti :8765 | xargs kill`.
-- **Moving it** — copying the app to /Applications or the Dock works fine: the
-  app is a small shell that points back at this folder, where the real code,
-  models, and Python environment live. What *does* break it is moving or
-  renaming this folder itself — fix that by running `./make_app.sh` again (and
-  re-copying if you keep one in /Applications). Deleting the folder deletes
-  the app's insides; the .app alone is not the program.
+- **Installing it properly** — the build offers to put a copy in /Applications,
+  so it shows up in Launchpad and Spotlight like any Mac app (rebuilds refresh
+  that copy automatically). This works because the app is a small shell that
+  points back at this folder, where the real code, models, and Python
+  environment live. What *does* break it is moving or renaming this folder
+  itself — fix that by running `./make_app.sh` again. Deleting the folder
+  deletes the app's insides; the .app alone is not the program.
 
 Otherwise, the classic way:
 

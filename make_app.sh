@@ -63,6 +63,24 @@ LAUNCH
 chmod +x "$APP/Contents/MacOS/StrataVoice"
 
 echo "✓ built $APP"
-echo "  · open it:            open \"$APP\""
-echo "  · keep it handy:      drag it to the Dock, or copy to /Applications"
+
+# Install into /Applications (Launchpad + Spotlight), the way Mac apps live.
+# An existing copy there is refreshed silently so rebuilds never leave a stale
+# launcher behind; first time, we ask.
+if [ -d "/Applications/$APP" ]; then
+  rm -rf "/Applications/$APP"
+  cp -R "$APP" /Applications/
+  echo "  ✓ refreshed the copy in /Applications"
+else
+  printf "Put it in /Applications so it shows up in Launchpad and Spotlight? [Y/n]: "
+  read -r PUTAPP || PUTAPP="n"
+  if [ "$PUTAPP" != "n" ] && [ "$PUTAPP" != "N" ]; then
+    cp -R "$APP" /Applications/
+    echo "  ✓ installed — find it in Launchpad, or press ⌘Space and type \"Strata\""
+    open -R "/Applications/$APP" 2>/dev/null || true
+  fi
+fi
+
+echo "  · open it:            open \"$APP\"   (or from Launchpad / Spotlight)"
+echo "  · keep it handy:      drag it to the Dock"
 echo "  · moved the repo?     just run ./make_app.sh again"
