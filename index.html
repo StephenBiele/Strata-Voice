@@ -1040,7 +1040,7 @@
       </button>
       <button class="savebtn headsave" id="settingsSaveTop">Save</button></header>
     <div class="panelbody">
-      <p class="panelsub">Voice, cadence, and persona changes take effect on your next reply — no need to restart a conversation. Renaming {{ASSISTANT_NAME}} takes effect after a page refresh.</p>
+      <p class="panelsub">Changes apply from your next reply — no need to restart the conversation. Renaming {{ASSISTANT_NAME}} takes effect after a page refresh.</p>
       <div class="field"><label>Assistant name</label><input id="set_name" autocomplete="off" spellcheck="false"></div>
       <div class="switchrow adv">
         <div>
@@ -1066,7 +1066,7 @@
       <div class="switchrow" id="set_emotionrow">
         <div>
           <div class="switchlabel">Expressive emotion</div>
-          <div class="switchsub">Let the voice perform natural touches when the moment fits — laughs, chuckles, sighs, gasps, groans, yawns. Chatterbox only.</div>
+          <div class="switchsub">Adds natural touches — a laugh, a sigh, a gasp — when the moment fits. Chatterbox only.</div>
         </div>
         <button class="switch" id="set_emotion" role="switch" aria-checked="true"><span class="knob"></span></button>
       </div>
@@ -1125,7 +1125,7 @@
         <textarea id="set_previewtext" rows="2" placeholder="Optional — type your own line to hear it. Leave blank for the default sample."></textarea>
       </div>
       <button class="ghostbtn" id="set_preview">▶ Preview voice</button>
-      <div class="hint">Preview uses your current voice picks even before you save — tweak, preview, then Save to apply to calls.</div>
+      <div class="hint">Plays your current picks even before you save — tweak, preview, then Save.</div>
       <div class="teststatus" id="set_previewstatus"></div>
 
       <h3 class="subhead">Model</h3>
@@ -1154,7 +1154,7 @@
       </div>
       <div class="field adv"><label>Memory model</label>
         <select id="set_memmodel" class="select"><option value="">Same as chat model</option></select>
-        <div class="hint">Which model writes memories (saving facts, recaps) in the background. Lists whatever your current endpoint serves — local Ollama or any OpenAI-compatible API. On Ollama, only worth changing if your Mac can hold two models at once — otherwise each background job swaps models in and out (~8 s each way) and your next reply pays the reload.</div>
+        <div class="hint">Which model writes memories in the background (saving facts, recaps). Lists what your endpoint serves. On Ollama, pick a second model only if your Mac can hold two at once — otherwise every memory job swaps models and your next reply pays the ~8 s reload.</div>
       </div>
 
       <h3 class="subhead">Speech recognition</h3>
@@ -1166,7 +1166,7 @@
       <div class="teststatus" id="set_asrstatus"></div>
 
       <h3 class="subhead">Talking</h3>
-      <p class="hint" style="margin:-.4rem 0 1rem">Conversations are live — it hears when you start and stop speaking, and the mic stays open for the whole call. Use the mute button any time, or type a message instead.</p>
+      <p class="hint" style="margin:-.4rem 0 1rem">Conversations are live: it hears when you start and stop speaking. Mute any time, or type a message instead.</p>
       <div class="switchrow">
         <div>
           <div class="switchlabel">Interrupt while it's speaking</div>
@@ -1197,7 +1197,7 @@
       <div class="switchrow adv">
         <div>
           <div class="switchlabel">Show the in-call tuning panel</div>
-          <div class="switchsub">A small button during calls for adjusting these live while you test.</div>
+          <div class="switchsub">Adds a small button during calls for adjusting these live.</div>
         </div>
         <button class="switch" id="set_debug" role="switch" aria-checked="false"><span class="knob"></span></button>
       </div>
@@ -1638,6 +1638,10 @@ function modelConfigHTML(p){
     </div>
   </div>
   <div id="${p}_adv" hidden>
+    <div class="warn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:1px"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
+      <span><b>Privacy:</b> a third-party cloud endpoint receives your conversations and remembered facts — they leave your machine. An endpoint on your own computer or home network stays private.</span>
+    </div>
     <div class="field"><label>API endpoint</label><input id="${p}_openai_base" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1  ·  or  http://localhost:8080/v1"></div>
     <div class="field"><label>API key</label><input id="${p}_openai_key" type="password" autocomplete="off" placeholder="sk-…  (leave blank for keyless local servers)">
       <div class="hint">🔒 Stored in your system keychain, never written to disk.</div></div>
@@ -1821,8 +1825,8 @@ function updateAsrBlurb(){
 function updateTtsEngineUI(){
   const chat=$("#set_ttsengine").value==="chatterbox";
   $("#set_ttsengineblurb").textContent = chat
-    ? "Chatterbox can perform inline laughs/sighs and clone a voice from a clip. First switch downloads it (~1 GB, up to a minute). Slower per reply than Kokoro."
-    : "Kokoro: many voices, very fast, neutral tone. No emotion performance.";
+    ? "Performs laughs and sighs, and can clone a voice from a short clip. Slower than Kokoro; the first switch downloads about 1 GB."
+    : "Fast and clean, with many voices to pick from. Doesn't perform emotion.";
   // Kokoro shows its voice packs; Chatterbox shows its cloned-voice picker.
   $("#set_voicerow").hidden = chat;
   $("#set_cbvoicerow").hidden = !chat;
