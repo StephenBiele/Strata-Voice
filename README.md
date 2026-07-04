@@ -64,10 +64,23 @@ Prefer a real Mac app over a browser tab? Build one once:
 ./make_app.sh && open "Strata Voice.app"
 ```
 
-That creates **Strata Voice.app** — a native window (WKWebView) with its own Dock
-icon that starts Ollama and the server for you, and only shuts down what it
-started. Drag it to the Dock or copy it to /Applications; if you move the repo,
-run `./make_app.sh` again. macOS will ask for microphone access on first talk.
+That creates **Strata Voice.app** — a native window with its own Dock icon.
+How it behaves:
+
+- **Starting** — double-click the app (or click it in the Dock). It checks for
+  Ollama and the voice server, starts whichever isn't running, then opens the
+  window. From fully stopped, one double-click brings everything up; the first
+  talk asks for microphone access.
+- **Stopping** — close the window. It shuts down only what *it* started: a
+  server you launched yourself (say, `./start.sh` in a terminal) is left alone
+  and keeps running in the background. A stray background server can always be
+  stopped with `lsof -ti :8765 | xargs kill`.
+- **Moving it** — copying the app to /Applications or the Dock works fine: the
+  app is a small shell that points back at this folder, where the real code,
+  models, and Python environment live. What *does* break it is moving or
+  renaming this folder itself — fix that by running `./make_app.sh` again (and
+  re-copying if you keep one in /Applications). Deleting the folder deletes
+  the app's insides; the .app alone is not the program.
 
 Otherwise, the classic way:
 
