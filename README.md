@@ -99,12 +99,14 @@ text share one session, one memory, one timeline.
 it still uses what it already knows.
 
 **Web lookups (optional, off by default)** — flip one switch and it can check the web
-when a question actually needs it: scores, store hours, weather, or "can you double
-check that?" (it verifies its own previous claim). A quick pre-check decides whether to
-search, answers stay to a sentence or two, and results live in memory for five minutes
-for follow-ups, then vanish — web content never touches the transcript or your
-memories. Searches go to DuckDuckGo (no API key), which is why it's opt-in: those
-queries leave your machine.
+when a question actually needs it: scores, store hours, news, or "can you double
+check that?" (it verifies its own previous claim). Weather questions skip search
+snippets entirely and pull **live forecast data** (Open-Meteo — keyless, like
+everything here). A quick pre-check decides whether to look anything up, answers stay
+to a sentence or two, a **sources chip** under each web answer lets you verify the
+links, and results live in memory for five minutes for follow-ups, then vanish — web
+content never touches the transcript or your memories. Searches go to DuckDuckGo (no
+API key), which is why it's opt-in: those queries leave your machine.
 
 **Reference files** — upload a PDF / DOCX / text file (a resume, notes, a story) and ask
 about it. Small files are given to the model whole; larger ones are chunked and embedded, so

@@ -166,8 +166,13 @@ short version; below it, the complete inventory.
   conversation never triggers a search.
 - **"Can you double check that?"** — questioning a previous claim makes it
   verify that claim against the web.
-- **Location-aware queries** — "what's the weather tomorrow?" searches for your
-  profile location, not a placeholder.
+- **Live weather data** — weather questions skip search snippets and pull real
+  forecast numbers from Open-Meteo (keyless, no signup), for your profile
+  location or any place you name.
+- **Location- and date-aware queries** — "what's the weather tomorrow?" uses
+  your profile location and today's date; timeless questions stay undated.
+- **Verifiable sources** — a small chip under each web answer shows site icons
+  and a count; hover or tap lists the actual links it read.
 - **Voice-shaped answers** — one or two spoken sentences with just the answer;
   it says when the results don't contain one instead of guessing.
 - **Five-minute working memory** — results stay in RAM for follow-ups ("tell me

@@ -260,6 +260,90 @@ def web_search(query: str, limit: int = 5) -> list[dict]:
         return []
 
 
+# Weather gets real data instead of search snippets: Open-Meteo is keyless (no
+# API key, no signup) and returns actual forecast numbers — the fix for stale
+# SEO pages answering "what's the weather" with last week's temperatures.
+_WEATHER_RE = re.compile(
+    r"\b(weather|forecast|temperature|temps?|rain(ing)?|snow(ing)?|humidity|"
+    r"wind(y)?|sunny|cloudy|precipitation|heat ?wave|cold front)\b", re.I)
+_WMO = {0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
+        45: "foggy", 48: "freezing fog", 51: "light drizzle", 53: "drizzle",
+        55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain",
+        66: "freezing rain", 67: "freezing rain", 71: "light snow", 73: "snow",
+        75: "heavy snow", 77: "snow grains", 80: "light showers", 81: "showers",
+        82: "heavy showers", 85: "snow showers", 86: "snow showers",
+        95: "thunderstorms", 96: "thunderstorms with hail", 99: "thunderstorms with hail"}
+
+
+def is_weather_query(query: str) -> bool:
+    return bool(_WEATHER_RE.search(query or ""))
+
+
+def weather_place_from_query(query: str, fallback: str = "") -> str:
+    """Pull the place out of a gate query like "tokyo weather july 4 2026" —
+    strip weather words, date words, and filler; what's left is the location.
+    Falls back to the profile location for bare "weather today" questions."""
+    q = _WEATHER_RE.sub(" ", query or "")
+    q = re.sub(r"\b(today|tonight|tomorrow|now|current(ly)?|right now|this|week|weekend|morning|afternoon|evening|hourly|daily|in|for|the|at|like|near|around|what'?s?|will|it|is|be|going|to|gonna|do(es)?)\b",
+               " ", q, flags=re.I)
+    q = re.sub(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b",
+               " ", q, flags=re.I)
+    q = re.sub(r"\d+", " ", q)
+    q = re.sub(r"[^\w\s,]", " ", q)
+    q = re.sub(r"\s+", " ", q).strip(" ,")
+    return q or fallback
+
+
+def weather_lookup(place: str) -> list[dict]:
+    """Live forecast from Open-Meteo (keyless): geocode the place, fetch current
+    conditions + 3 days, and return it shaped like a search result so it flows
+    through the same cache, prompt block, and sources chip as everything else."""
+    if not place:
+        return []
+    try:
+        # the geocoder matches bare names — "Denver, Colorado" and "denver co"
+        # find nothing, "Denver" does — so retry with the part before the comma,
+        # then with the trailing word (usually a state) dropped
+        words = place.split(",")[0].strip().split()
+        candidates = [place, place.split(",")[0].strip(),
+                      " ".join(words[:-1]) if len(words) > 1 else ""]
+        hit = None
+        for name in dict.fromkeys(c for c in candidates if c):
+            g = _HTTP.get("https://geocoding-api.open-meteo.com/v1/search",
+                          params={"name": name, "count": 1}, timeout=8).json()
+            hit = (g.get("results") or [None])[0]
+            if hit:
+                break
+        if not hit:
+            print(f"[web] weather: couldn't geocode {place!r}")
+            return []
+        loc = ", ".join(str(x) for x in [hit.get("name"), hit.get("admin1")] if x)
+        f = _HTTP.get("https://api.open-meteo.com/v1/forecast", params={
+            "latitude": hit["latitude"], "longitude": hit["longitude"],
+            "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
+            "temperature_unit": "fahrenheit", "wind_speed_unit": "mph",
+            "timezone": "auto", "forecast_days": 3}, timeout=8).json()
+        cur, day = f.get("current", {}), f.get("daily", {})
+        wmo = lambda c: _WMO.get(int(c or 0), "mixed conditions")
+        parts = [f"Right now: {round(cur.get('temperature_2m', 0))}°F "
+                 f"(feels like {round(cur.get('apparent_temperature', 0))}°F), "
+                 f"{wmo(cur.get('weather_code'))}, wind {round(cur.get('wind_speed_10m', 0))} mph."]
+        for i, date in enumerate(day.get("time", [])[:3]):
+            name = ("Today", "Tomorrow")[i] if i < 2 else \
+                   datetime.strptime(date, "%Y-%m-%d").strftime("%A")
+            precip = (day.get("precipitation_probability_max") or [0, 0, 0])[i] or 0
+            parts.append(f"{name}: {wmo(day['weather_code'][i])}, "
+                         f"high {round(day['temperature_2m_max'][i])}°F, "
+                         f"low {round(day['temperature_2m_min'][i])}°F, "
+                         f"{round(precip)}% chance of precipitation.")
+        return [{"title": f"Live weather for {loc}", "url": "https://open-meteo.com",
+                 "description": " ".join(parts)}]
+    except Exception as e:
+        print(f"[web] weather lookup failed ({e}): {place!r}")
+        return []
+
+
 _WEB_GATE_PROMPT = """You decide whether answering the user's LATEST message needs a live web search.
 RULE 1 (overrides everything): if the user says "look up", "look it up", "check", \
 "double check", "verify", "google", or "search" — you MUST return a query, no matter \

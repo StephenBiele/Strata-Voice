@@ -1316,8 +1316,8 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     # web turn never looks frozen.
     web_ctx, web_fresh, web_sources = None, False, []
     if s.get("web_search"):
-        query = vc.web_gate(text, _history[-6:], _mem_llm_cfg(),
-                            place=_read_json(PROFILE_FILE, {}).get("location", ""))
+        home = _read_json(PROFILE_FILE, {}).get("location", "")
+        query = vc.web_gate(text, _history[-6:], _mem_llm_cfg(), place=home)
         if query:
             cached = _web_fresh_match(query)
             if cached:
@@ -1326,8 +1326,18 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
                 yield {"type": "web", "label": "going back over what it found"}
                 print(f"[web] reusing cached results for {query!r}")
             else:
-                yield {"type": "web", "label": f"searching the web · “{query}”"}
-                results = vc.web_search(query)
+                # Weather goes to Open-Meteo (keyless, live numbers) instead of
+                # search snippets; anything else — or a failed lookup — searches.
+                results = []
+                if vc.is_weather_query(query):
+                    wplace = vc.weather_place_from_query(query, fallback=home)
+                    yield {"type": "web", "label": f"checking the weather for {wplace or 'you'}"}
+                    results = vc.weather_lookup(wplace)
+                    if results:
+                        print(f"[web] live forecast for {wplace!r}")
+                if not results:
+                    yield {"type": "web", "label": f"searching the web · “{query}”"}
+                    results = vc.web_search(query)
                 if results:
                     _web_remember(query, results)
                     web_fresh = True
