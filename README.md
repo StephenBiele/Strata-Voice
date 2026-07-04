@@ -33,7 +33,8 @@ are first-class operations against a real canonical store, not lines in a text f
 
 Speech never leaves your machine: ASR, TTS, and voice-activity detection all run
 on-device via Apple's MLX. The only network calls are to the LLM you choose — local
-Ollama by default.
+Ollama by default — plus, only if you switch them on, keyless web lookups
+(DuckDuckGo search, Open-Meteo weather).
 
 ## Install
 
@@ -169,6 +170,7 @@ LLM's judgment — and incognito turns write nothing at all.
 | Hands-free VAD | Silero VAD | MLX, on-device |
 | Semantic recall | nomic-embed-text | Ollama, local |
 | Chat + memory | your pick — tiers above, or any model in Settings | Ollama / any OpenAI-compatible API |
+| Web lookups (opt-in) | DuckDuckGo search + Open-Meteo weather — both keyless | network, off by default |
 
 One model handles both chat and memory by default: Ollama loads models one at a time,
 so a separate memory model would evict the chat model on every background job (~8 s of
@@ -184,7 +186,7 @@ enough RAM to hold two models resident.
                 │ /turn/stream · /chat/stream (NDJSON)        │ /vad/feed (PCM)
 ┌───────────────▼─────────────────────────────┐  ┌────────────▼─────────────┐
 │        main server :8765 (one thread)       │  │    VAD server :8766      │
-│   Parakeet ASR → LLM → Kokoro TTS (MLX)     │  │  Silero VAD (mlx-audio)  │
+│  Parakeet ASR → LLM → Kokoro/Chatterbox TTS │  │  Silero VAD (mlx-audio)  │
 │   background: memory worker · recap+harvest │  │  speech start/stop       │
 └───────────────┬─────────────────────────────┘  └──────────────────────────┘
                 ▼
@@ -267,6 +269,8 @@ Built on [Strata Memory](https://github.com/StephenBiele/strata-memory),
 [Parakeet](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3),
 [Chatterbox](https://github.com/resemble-ai/chatterbox) (Resemble AI),
 [Silero VAD](https://github.com/snakers4/silero-vad), and [Ollama](https://ollama.com).
+Optional web lookups use [DuckDuckGo](https://duckduckgo.com) search and
+weather data by [Open-Meteo](https://open-meteo.com) (CC BY 4.0).
 
 ## License
 

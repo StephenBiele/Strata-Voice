@@ -62,12 +62,12 @@ fi
 # 4. speech-model cache
 HF="$HOME/.cache/huggingface/hub"
 if [ -d "$HF" ]; then
-  printf "Remove the cached speech models (Parakeet, Kokoro, ~1 GB)? [y/N]: "
+  printf "Remove the cached speech models (Parakeet, Kokoro, Chatterbox if downloaded — 1-2 GB)? [y/N]: "
   read -r A
   if [ "$A" = "y" ] || [ "$A" = "Y" ]; then
     rm -rf "$HF"/models--mlx-community--parakeet* "$HF"/models--prince-canuma--Kokoro* \
            "$HF"/models--openai--whisper* "$HF"/models--mlx-community--silero* \
-           "$HF"/models--mlx-community--Qwen3-ASR* 2>/dev/null || true
+           "$HF"/models--mlx-community--Qwen3-ASR* "$HF"/models--mlx-community--chatterbox* 2>/dev/null || true
     echo "  ✓ removed cached speech models"
   fi
 fi
