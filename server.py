@@ -215,41 +215,86 @@ def _web_remember(query: str, results: list) -> None:
         del _web_cache[oldest]
 
 
-def _web_fresh_match(query: str):
-    """A still-fresh cache entry asking essentially the same thing, or None.
-    The gate rephrases repeats ("store hours today" vs "close today"), so exact
-    match isn't enough — word-set overlap catches same-ground queries while
-    staying below the level where genuinely new questions would false-match."""
+# Tokens that don't carry the TOPIC of a query. Dates and time words appear in
+# most gate queries ("… july 4 2026"), so leaving them in made unrelated
+# questions look similar — a weather lookup would false-match an events question
+# and the system looped on stale results instead of searching fresh.
+_WEB_STOP = {"today", "tonight", "tomorrow", "now", "current", "currently",
+             "near", "me", "my", "this", "week", "weekend", "morning", "evening",
+             "in", "for", "the", "a", "an", "at", "of", "on", "to", "and", "what",
+             "january", "february", "march", "april", "may", "june", "july",
+             "august", "september", "october", "november", "december"}
+
+
+def _web_terms(q: str) -> set:
+    """Topic words of a query: lowercase alpha tokens minus date/filler noise
+    (digits drop out with the [a-z]+ pattern — years and day numbers are noise)."""
+    return {w for w in re.findall(r"[a-z]+", q.lower()) if w not in _WEB_STOP}
+
+
+def _web_fresh_match(query: str) -> str | None:
+    """Cache key of a still-fresh entry asking essentially the same thing, or
+    None. The gate rephrases repeats ("store hours today" vs "close today"), so
+    exact match isn't enough — TOPIC-word overlap catches same-ground queries
+    while a genuinely new question ("events" vs "weather") stays below it."""
     now = time.time()
-    words = set(re.findall(r"[a-z0-9]+", query.lower()))
+    words = _web_terms(query)
     if not words:
         return None
     for k, e in _web_cache.items():
         if now - e["t"] > WEB_TTL_S:
             continue
-        kw = set(re.findall(r"[a-z0-9]+", k))
-        if kw and len(words & kw) / len(words | kw) >= 0.55:
-            return e
+        kw = _web_terms(k)
+        if kw and len(words & kw) / len(words | kw) >= 0.5:
+            return k
     return None
 
 
-def _web_block() -> tuple[str | None, list[dict]]:
+def _web_block(active_key: str | None = None) -> tuple[str | None, list[dict]]:
     """Still-fresh search results as (prompt block, source list for the UI's
-    verification chip), purging expired entries."""
+    verification chip), purging expired entries. When this turn ran (or reused)
+    a lookup, `active_key` marks it: that entry is featured and everything older
+    is explicitly downgraded — otherwise the model keeps answering new questions
+    from the previous search's results instead of the current one."""
     now = time.time()
     for k in [k for k, e in _web_cache.items() if now - e["t"] > WEB_TTL_S]:
         del _web_cache[k]
     if not _web_cache:
         return None, []
-    parts, sources, seen = [], [], set()
-    for e in sorted(_web_cache.values(), key=lambda e: e["t"]):
+
+    def render(e):
         lines = "\n".join(f"- {r['title']}: {r['description']} ({r['url']})"
                           for r in e["results"])
-        parts.append(f"Search \"{e['query']}\":\n{lines}")
+        return f"Search \"{e['query']}\":\n{lines}"
+
+    parts, sources, seen = [], [], set()
+
+    def collect(e):
         for r in e["results"]:
             if r["url"] and r["url"] not in seen:
                 seen.add(r["url"])
                 sources.append({"title": r["title"], "url": r["url"]})
+
+    active = _web_cache.get(active_key) if active_key else None
+    older = [e for k, e in sorted(_web_cache.items(), key=lambda kv: kv[1]["t"])
+             if k != active_key]
+    if active:
+        parts.append("Results for the CURRENT question — answer from these:\n"
+                     + render(active))
+        collect(active)
+        if older:
+            parts.append("Earlier lookups from this conversation (they answered "
+                         "PREVIOUS questions — don't answer the current one from "
+                         "them unless the user is asking about that topic again):\n"
+                         + "\n\n".join(render(e) for e in older))
+    else:
+        # no lookup this turn (e.g. a follow-up the conversation already covers):
+        # keep everything available, let the model match topic to question
+        parts.append("Recent lookups from this conversation (use whichever "
+                     "matches what the user is asking about):\n"
+                     + "\n\n".join(render(e) for e in older))
+        for e in older:
+            collect(e)
     return "\n\n".join(parts), sources
 _embedder = None    # real embedding model if available, else None (dump-all recall)
 _lock = threading.Lock()
@@ -1314,15 +1359,15 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     # Live web-activity events ({"type":"web","label":…}) narrate each stage in
     # the UI — searching → found sites, summarizing — Hermes-style, so a 2-4s
     # web turn never looks frozen.
-    web_ctx, web_fresh, web_sources = None, False, []
+    web_ctx, web_fresh, web_sources, web_key = None, False, [], None
     if s.get("web_search"):
         home = _read_json(PROFILE_FILE, {}).get("location", "")
         query = vc.web_gate(text, _history[-6:], _mem_llm_cfg(), place=home)
         if query:
-            cached = _web_fresh_match(query)
-            if cached:
+            web_key = _web_fresh_match(query)
+            if web_key:
                 # actively being asked about — reuse and keep alive, no re-fetch
-                cached["t"] = time.time()
+                _web_cache[web_key]["t"] = time.time()
                 yield {"type": "web", "label": "going back over what it found"}
                 print(f"[web] reusing cached results for {query!r}")
             else:
@@ -1340,6 +1385,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
                     results = vc.web_search(query)
                 if results:
                     _web_remember(query, results)
+                    web_key = query.lower().strip()   # feature these results this turn
                     web_fresh = True
                     doms = []
                     for r in results:
@@ -1354,7 +1400,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
                 else:
                     yield {"type": "web", "label": "the search came up empty"}
                     print(f"[web] no results for {query!r}")
-        web_ctx, web_sources = _web_block()
+        web_ctx, web_sources = _web_block(web_key)
 
     voice, speed = s["tts_voice"], float(s["tts_speed"])
     if speak and _tts_engine == "chatterbox":
@@ -1930,25 +1976,6 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     return self._json(200, {"ok": False, "error": str(e)})
             return self._json(200, {"ok": True, **result})
-        if u.path == "/memory/audit":
-            with _lock:
-                try:
-                    issues = vc.audit_memories(_strata, _llm_cfg())
-                except Exception as e:
-                    return self._json(200, {"ok": False, "error": str(e)})
-            return self._json(200, {"ok": True, "issues": issues})
-        if u.path == "/memory/resolve":
-            body = json.loads(self._body() or b"{}")
-            ids = body.get("remove") or []
-            removed = 0
-            with _lock:
-                for mid in ids:
-                    try:
-                        _strata.delete_memory(int(mid), mode="hard")
-                        removed += 1
-                    except Exception as e:
-                        print(f"[audit] resolve delete failed for {mid}: {e}")
-            return self._json(200, {"ok": True, "removed": removed})
         if u.path == "/eval/run":
             with _lock:
                 try:

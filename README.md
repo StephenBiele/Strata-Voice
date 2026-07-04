@@ -90,8 +90,8 @@ anything you forget mid-call won't be brought up again. See
 [How memory works](#how-memory-works).
 
 **Memory hub** — Timeline (every turn, with the facts learned in that moment hanging off
-it), Past chats, Memories, and Reference files, in one place. Memory tools find
-contradictions and junk, run recall tests, and re-review past conversations.
+it), Past chats, Memories, and Reference files, in one place. Memory tools propose
+cleanups you approve one by one, run recall tests, and re-review past conversations.
 
 **Text chat** — prefer typing? Replies stream in and can optionally be spoken. Voice and
 text share one session, one memory, one timeline.

@@ -129,8 +129,9 @@ short version; below it, the complete inventory.
   surfaced only when relevant, so "what were we talking about last time?" works.
 - **Memory hub** — Timeline (every turn with the facts learned in that moment),
   Past chats, Memories (dated, newest first), and Reference files in one place.
-- **Memory tools** — find contradictions and junk ("Smooth memories"), run
-  recall tests, re-review past conversations.
+- **Memory tools** — "Smooth memories" proposes cleanups (garbled phrasing,
+  duplicates, contradictions, junk) that you approve, edit, or dismiss one by
+  one; plus recall tests and re-review of past conversations.
 - **Works with any backend** — the full memory system runs through whatever
   model you connect, local or remote (verified end-to-end).
 - **Separate memory model** — optionally use a different model for background

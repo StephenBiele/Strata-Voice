@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>{{ASSISTANT_NAME}}</title>
+<title>Strata Voice</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,340;9..144,440;9..144,560&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
@@ -921,7 +921,7 @@
   <!-- LANDING -->
   <section class="view" id="landing">
     <div class="landing-hero">
-      <div class="wordmark">{{ASSISTANT_NAME}}</div>
+      <div class="wordmark">Strata Voice</div>
       <p class="tagline">Your private, on-device voice companion that <em>remembers</em>.</p>
     </div>
     <div class="landing-actions">
@@ -1286,7 +1286,6 @@
 
       <section class="subsection" id="sub-memories" hidden>
         <div class="toolbar">
-          <button class="toolbtn" id="auditBtn" title="Scan your memories for facts that contradict each other, duplicates, and junk — with one-click fixes">⚖ Find contradictions</button>
           <button class="toolbtn" id="evalBtn" title="Quiz the model on your profile and memories to check what it can actually recall">✓ Run recall test</button>
           <button class="toolbtn" id="polishBtn" title="Drafts cleanups for awkward or junky memories — you review and approve each one before anything changes">✨ Smooth memories</button>
         </div>
@@ -1299,7 +1298,7 @@
           <input type="file" id="fileInput" accept=".pdf,.docx,.txt,.md,.csv,.json" hidden>
           <span id="uploadLabel">+ Add a file</span>
         </label>
-        <p class="paneltip">Upload a resume, candidate profile, or notes. {{ASSISTANT_NAME}} reads the text and references it when you ask — “what’s on my resume?”, “tailor this to a backend role”, and so on.</p>
+        <p class="paneltip">Upload a PDF, DOCX, or text file — a resume, notes, a story — and ask about it. Small files are read whole; larger ones are indexed so each question pulls up just the relevant passages.</p>
         <div id="docList"></div>
       </section>
     </div>
@@ -2278,7 +2277,7 @@ async function loadFiles(){
   const body=document.getElementById("docList");
   body.innerHTML=skeleton(2);
   let list=[]; try{ list=(await (await fetch("/documents")).json()).documents||[]; }catch(_){}
-  if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">No files yet</span>Add a resume or profile to give ${ASSISTANT_NAME} context.</div>`; return; }
+  if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">No files yet</span>Add a document — a resume, notes, a story — and ask about it in conversation.</div>`; return; }
   body.innerHTML="";
   list.forEach(doc=>{
     const row=document.createElement("div"); row.className="row";
@@ -2783,7 +2782,6 @@ $("#callComposer").addEventListener("submit", (e)=>{ e.preventDefault(); sendCal
 function esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":String(s); return d.innerHTML; }
 function infoIcon(text){ return `<span class="info" tabindex="0" role="img" aria-label="${esc(text)}">i<span class="tip">${esc(text)}</span></span>`; }
 const RECALL_TIP="Read-only — it never changes your memory. It asks the model a few questions using your saved profile and memories, then checks the replies. Name and location are exact checks. “Open recall” asks an open question, then a second model pass judges which of your facts the answer actually conveyed — so saying “Colorado” counts as recalling “based in the United States.” The score is the share recalled.";
-const AUDIT_TIP="Compares your stored memories against each other to find cleanup: real contradictions (two memories that can’t both be true), redundancy (one memory fully covered by another, more specific memory), duplicates, and junk fragments. Two memories that are both true at different levels of detail count as redundant, never as a conflict. Nothing is deleted until you press Apply fix.";
 function gradeChip(label,val){
   const v=(val||"").toLowerCase();
   const cls=v==="good"?"good":v==="poor"?"poor":"mixed";
@@ -2810,15 +2808,7 @@ reviewBtn.addEventListener("click", async()=>{
   reviewResult.innerHTML=html;
 });
 
-const auditBtn=$("#auditBtn"), evalBtn=$("#evalBtn"), memTools=$("#memTools");
-auditBtn.addEventListener("click", async()=>{
-  auditBtn.disabled=true; auditBtn.textContent="Checking…";
-  memTools.hidden=false; memTools.innerHTML='<div class="muted">Scanning memory for contradictions and duplicates…</div>';
-  let r={}; try{ r=await (await fetch("/memory/audit",{method:"POST"})).json(); }catch(_){}
-  auditBtn.disabled=false; auditBtn.textContent="⚖ Find contradictions";
-  if(!r.ok){ memTools.innerHTML=`<div class="muted">Couldn’t run the check${r.error?": "+esc(r.error):""}.</div>`; return; }
-  renderAudit(r.issues||[]);
-});
+const evalBtn=$("#evalBtn"), memTools=$("#memTools");
 // one-shot smoothing pass over the whole store — same treatment new memories get
 const polishBtn=$("#polishBtn");
 polishBtn.addEventListener("click", async()=>{
@@ -2912,28 +2902,6 @@ function renderPolish(changes){
     noneBtn.textContent="Dismissed"; allBtn.disabled=noneBtn.disabled=true; counts();
   });
   counts();
-}
-function renderAudit(issues){
-  if(!issues.length){ memTools.innerHTML=`<div class="rhead">Memory hygiene${infoIcon(AUDIT_TIP)}</div><div class="muted">Nothing to clean up — no contradictions, redundancy, duplicates, or junk found.</div>`; return; }
-  memTools.innerHTML=`<div class="rhead">Memory hygiene <span class="muted">${issues.length} item${issues.length===1?"":"s"}</span>${infoIcon(AUDIT_TIP)}</div>`;
-  issues.forEach((it,i)=>{
-    const el=document.createElement("div"); el.className="issue";
-    let h="";
-    if(it.kind) h+=`<div class="kindtag ${esc(it.kind)}">${esc(it.kind)}</div>`;
-    if(it.keep_text) h+=`<div class="keep">Keep: ${esc(it.keep_text)}</div>`;
-    h+=`<div class="drop">Remove: ${it.remove_texts.map(esc).join(" · ")}</div>`;
-    if(it.reason) h+=`<div class="reason">${esc(it.reason)}</div>`;
-    el.innerHTML=h;
-    const btn=document.createElement("button"); btn.className="toolbtn"; btn.style.marginTop=".4rem"; btn.textContent="Apply fix";
-    btn.addEventListener("click", async()=>{
-      btn.disabled=true; btn.textContent="Applying…";
-      try{ await fetch("/memory/resolve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({remove:it.remove})}); }catch(_){}
-      el.innerHTML='<div class="muted">Resolved ✓</div>';
-      loadMemories();
-    });
-    el.appendChild(btn);
-    memTools.appendChild(el);
-  });
 }
 evalBtn.addEventListener("click", async()=>{
   evalBtn.disabled=true; evalBtn.textContent="Testing…";
