@@ -430,6 +430,26 @@
   }
   @keyframes bgdot-pulse{ 0%,100%{ opacity:.35; transform:scale(.85); } 50%{ opacity:1; transform:scale(1); } }
   @keyframes bgpill-in{ from{ opacity:0; transform:translateY(6px); } to{ opacity:1; transform:none; } }
+  /* "here's what I've learned" — a rare, tappable moment of trust, not a nag */
+  .learnedcard{
+    position:fixed; z-index:55; left:50%; top:calc(env(safe-area-inset-top) + 6.6rem);
+    transform:translateX(-50%); width:max-content; max-width:min(30rem, 88vw);
+    display:inline-flex; align-items:center; gap:.55rem; cursor:pointer; text-align:left;
+    padding:.55rem .7rem .55rem .85rem; border-radius:999px; font:inherit;
+    border:1px solid oklch(0.66 0.10 133 / .3); color:var(--ink);
+    background:oklch(0.985 0.012 122 / .94);
+    box-shadow:0 14px 34px -20px oklch(0.4 0.05 130 / .8);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    animation:learned-in .35s var(--ease);
+  }
+  .learnedcard[hidden]{ display:none; }
+  .learnedcard .lcspark{ color:var(--sage-deep); font-size:.95rem; flex:none; }
+  .learnedcard .lctext{ font-size:.85rem; font-weight:500; }
+  .learnedcard .lcsee{ flex:none; font-size:.8rem; font-weight:700; color:var(--paper);
+    background:var(--sage-deep); border-radius:999px; padding:.2rem .7rem; }
+  .learnedcard:hover{ border-color:var(--sage-deep); }
+  @keyframes learned-in{ from{ opacity:0; transform:translate(-50%,-8px); } to{ opacity:1; transform:translate(-50%,0); } }
+  @media (prefers-reduced-motion: reduce){ .learnedcard{ animation:none; } }
   @media (prefers-reduced-motion: reduce){ .bgdot{ animation:none; } .bgpill{ animation:none; } }
 
   .chatdrawer{
@@ -1374,6 +1394,11 @@
      title="Background memory work is running — brand-new facts and the last conversation's recap may not be recallable until it finishes.">
   <span class="bgdot" aria-hidden="true"></span><span id="bgPillText">updating memory…</span>
 </div>
+<button class="learnedcard" id="learnedCard" hidden aria-label="See what it's learned about you">
+  <span class="lcspark" aria-hidden="true">✦</span>
+  <span class="lctext">I've learned a few new things about you</span>
+  <span class="lcsee">See</span>
+</button>
 
 <script>
 const $ = (s)=>document.querySelector(s);
@@ -1696,6 +1721,7 @@ function end(){
 const VIEWS=["landing","call","memory","chatDetail","profile","settings","modelsetup"];
 function showView(id){
   VIEWS.forEach(v=>{ const el=document.getElementById(v); if(el) el.hidden=(v!==id); });
+  if(id!=="call" && typeof hideLearned==="function") hideLearned();   // it's a call-view moment only
 }
 function openView(v){
   showView(v);
@@ -2392,6 +2418,7 @@ async function loadMemories(){
   const body=document.getElementById("memoriesBody");
   body.innerHTML=skeleton(4);
   let list=[]; try{ list=(await (await fetch("/memories")).json()).memories||[]; }catch(_){}
+  setMemSeen(list.length); hideLearned();   // viewing the list clears the "learned" nudge
   if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">Nothing remembered yet</span>Tell ${ASSISTANT_NAME} durable facts about you and they’ll appear here.</div>`; return; }
   body.innerHTML="";
   list.forEach(m=>{
@@ -2668,7 +2695,27 @@ function flashMemory(memories){
     setTimeout(()=>memflash.classList.remove("show"), 2200);
   }
   lastMemCount=memories.length;
+  maybeShowLearned(memories.length);
 }
+/* "I've learned a few new things" — surface the memory list as a moment of
+   trust, but rarely: only when ≥3 facts have piled up since you last looked,
+   and not again until even more arrive (so it never nags). */
+const MEM_LEARN_DELTA=3;
+let _memDismissedAt=0;   // memory count when the card was last shown-and-ignored
+function memSeen(){ try{ return parseInt(localStorage.getItem("vc_mem_seen")||"0",10)||0; }catch(_){ return 0; } }
+function setMemSeen(n){ try{ localStorage.setItem("vc_mem_seen", String(n||0)); }catch(_){} }
+function hideLearned(){ const c=$("#learnedCard"); if(c){ c.hidden=true; clearTimeout(c._t); } }
+function maybeShowLearned(count){
+  const card=$("#learnedCard"); if(!card) return;
+  if(count-memSeen()>=MEM_LEARN_DELTA && count>_memDismissedAt){
+    card.hidden=false; clearTimeout(card._t);
+    card._t=setTimeout(()=>{ card.hidden=true; _memDismissedAt=count; }, 9000);  // ignored → wait for more
+  }
+}
+$("#learnedCard").addEventListener("click", ()=>{
+  hideLearned(); if(lastMemCount!=null) setMemSeen(lastMemCount);
+  openMemory("memories");
+});
 
 /* ---------- WAV helpers ---------- */
 function flatten(chunks){

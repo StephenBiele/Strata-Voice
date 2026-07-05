@@ -36,6 +36,12 @@ on-device via Apple's MLX. The only network calls are to the LLM you choose — 
 Ollama by default — plus, only if you switch them on, keyless web lookups
 (DuckDuckGo search, Open-Meteo weather).
 
+> **Your memory is local, offline, and yours — and it gets better the more you talk.**
+> Every fact, the timeline, and the recaps live in a database on your Mac. Nothing is
+> synced to a cloud, and with a local model it works with no internet at all. The more
+> you use it the more it knows you, facts are distilled from how you naturally talk and
+> cleaned as they're stored, and you can see, correct, or delete any of it at any time.
+
 ## Install
 
 ```sh

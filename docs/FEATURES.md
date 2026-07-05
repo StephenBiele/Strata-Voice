@@ -131,6 +131,10 @@ short version; below it, the complete inventory.
   follows ("call me Alex", "never suggest alcohol", "keep replies short"). Stored
   separately from facts and injected into every reply unconditionally — they're
   never smoothed away, forgotten, or subject to relevance gating.
+- **"Here's what I've learned"** — after a few new facts accumulate, a quiet,
+  tappable card offers to show you what it's picked up (opening the Memories
+  list). Low-frequency by design: it won't reappear until even more is learned,
+  and viewing the list clears it. Memory is never hidden — this just surfaces it.
 - **Memory hub** — Timeline (every turn with the facts learned in that moment),
   Rules, Past chats, Memories (dated, newest first), and Reference files in one place.
 - **Memory tools** — "Smooth memories" proposes cleanups (garbled phrasing,
