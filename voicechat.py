@@ -439,7 +439,8 @@ def _now_context() -> str:
 def build_messages(history, memories, documents=None, profile=None,
                    persona: str | None = None, recent=None,
                    forgotten=None, emotion: bool = False,
-                   web: str | None = None, web_fresh: bool = False) -> list[dict]:
+                   web: str | None = None, web_fresh: bool = False,
+                   rules=None) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
 
     `persona` is the user-editable part; the fixed MEMORY_DIRECTIVES are
@@ -451,6 +452,14 @@ def build_messages(history, memories, documents=None, profile=None,
     system = persona or PERSONA_PROMPT
     if profile:
         system += f"\n\n{profile}"
+    if rules:
+        # L4 guardrails: standing rules the user set. Injected every turn,
+        # unconditionally, ABOVE memories — these are hard boundaries, not
+        # suggestions, and they always apply even if nothing recalls them.
+        joined = "\n".join(f"- {r}" for r in rules)
+        system += ("\n\nRULES the user has set — always follow these, in every reply, "
+                   "even when nothing above reminds you to. They override your own "
+                   "defaults but never the user's explicit request in the moment:\n" + joined)
     system += ("\n\n" + _now_context() +
                " Use this for time-aware replies (greetings, time of day, \"today\"); "
                "don't state the date or time unless it's relevant.")
@@ -693,12 +702,45 @@ def _forget(strata, keywords: str, memories: list[dict]) -> None:
 # ---- memory listing ----------------------------------------------------------
 def list_memories(strata) -> list[dict]:
     # Facts only (L1). Excludes L0 EPISODE events, which live on the same store but
-    # are the raw episodic spine for the timeline, not distilled memories.
+    # are the raw episodic spine for the timeline, not distilled memories — and
+    # L4 GUARDRAIL rules, which have their own always-on path (list_rules).
     from strata.canonical.records import Status, RecordType
     recs = strata.engine.store.query(record_type=RecordType.FACT, exclude_tombstoned=True)
     active = [r for r in recs if r.status in (Status.ACTIVE, Status.REINFORCED)]
     active.sort(key=lambda r: r.created_at)
     return [{"id": r.id, "text": r.content, "t": r.created_at} for r in active]
+
+
+# ---- Rules (L4 guardrails) ---------------------------------------------------
+# User-set standing rules. Stored as L4 GUARDRAIL records so they're structurally
+# separate from facts: list_memories() (which drives the Memories page, smoothing,
+# recall fallback, AND the "forget X" path) filters to FACT, so rules can never be
+# smoothed, decayed, recall-gated, or forgotten by accident. They are injected into
+# EVERY turn's prompt unconditionally — that unconditional-ness is the whole point.
+
+def list_rules(strata) -> list[dict]:
+    """Active standing rules, oldest first."""
+    from strata.canonical.records import Status, RecordType
+    recs = strata.engine.store.query(record_type=RecordType.GUARDRAIL, exclude_tombstoned=True)
+    active = [r for r in recs if r.status in (Status.ACTIVE, Status.REINFORCED)]
+    active.sort(key=lambda r: r.created_at)
+    return [{"id": r.id, "text": r.content, "t": r.created_at} for r in active]
+
+
+def add_rule(strata, text: str) -> dict | None:
+    """Store one standing rule (L4). Deduplicates case-insensitively."""
+    text = _clean(text)[:200]
+    if len(text) < 2:
+        return None
+    for r in list_rules(strata):
+        if r["text"].lower() == text.lower():
+            return r
+    try:
+        res = strata.write_memory(text, tier="L4", record_type="guardrail")
+    except Exception as e:
+        print(f"[rules] add failed: {e}")
+        return None
+    return {"id": res.get("id"), "text": text} if isinstance(res, dict) else None
 
 
 # ---- semantic recall (Strata vector layer) -----------------------------------

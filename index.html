@@ -1291,6 +1291,7 @@
     <div class="panelbody">
       <div class="subnav" role="tablist" aria-label="Memory sections">
         <button class="subseg active" data-sub="memories" role="tab" aria-selected="true">Memories</button>
+        <button class="subseg" data-sub="rules" role="tab" aria-selected="false">Rules</button>
         <button class="subseg" data-sub="chats" role="tab" aria-selected="false">Past chats</button>
         <button class="subseg" data-sub="timeline" role="tab" aria-selected="false">Timeline</button>
         <button class="subseg" data-sub="files" role="tab" aria-selected="false">Reference files</button>
@@ -1312,6 +1313,15 @@
         </div>
         <div id="memTools" class="toolresult" hidden></div>
         <div id="memoriesBody"></div>
+      </section>
+
+      <section class="subsection" id="sub-rules" hidden>
+        <p class="panelsub">Standing rules {{ASSISTANT_NAME}} always follows — how to address you, topics to avoid, things to always do. Unlike memories, these apply to every reply and are never smoothed away or forgotten on their own.</p>
+        <form class="callcomposer" id="ruleForm" style="width:100%;margin:0 0 1rem">
+          <input id="ruleInput" autocomplete="off" spellcheck="false" placeholder="e.g. Always call me Alex · Never suggest alcohol · I'm vegetarian">
+          <button class="sendbtn" type="submit">Add</button>
+        </form>
+        <div id="rulesBody"></div>
       </section>
 
       <section class="subsection" id="sub-files" hidden>
@@ -1677,7 +1687,7 @@ function openView(v){
 }
 /* Memory hub: one view, four sub-sections (Timeline / Past chats / Memories / Files) */
 let lastSub="memories";
-const SUBS=["memories","chats","timeline","files"];
+const SUBS=["memories","rules","chats","timeline","files"];
 function openMemory(sub){
   showView("memory");
   showMemorySub(sub||lastSub);
@@ -1692,7 +1702,33 @@ function showMemorySub(sub){
   if(sub==="timeline") loadTimeline();
   else if(sub==="chats") loadChats();
   else if(sub==="memories"){ const mt=$("#memTools"); if(mt){ mt.hidden=true; mt.innerHTML=""; } loadMemories(); }
+  else if(sub==="rules") loadRules();
   else if(sub==="files") loadFiles();
+}
+async function loadRules(){
+  const body=$("#rulesBody"); body.innerHTML=skeleton(3);
+  let list=[]; try{ list=(await (await fetch("/rules")).json()).rules||[]; }catch(_){}
+  if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">No rules yet</span>Add a standing rule above — ${ASSISTANT_NAME} will follow it in every conversation.</div>`; return; }
+  body.innerHTML="";
+  list.forEach(r=>{
+    const row=document.createElement("div"); row.className="row memitem";
+    row.innerHTML='<div class="grow"><div class="title"></div></div><button class="x" title="Remove this rule" aria-label="Remove this rule">✕</button>';
+    row.querySelector(".title").textContent=r.text;
+    row.querySelector(".x").addEventListener("click",(e)=>{
+      confirmThenDelete(e.currentTarget, async()=>{
+        await fetch("/rules/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:r.id})});
+        loadRules();
+      });
+    });
+    body.appendChild(row);
+  });
+}
+async function addRule(){
+  const inp=$("#ruleInput"); const text=(inp.value||"").trim();
+  if(!text) return;
+  inp.value=""; inp.disabled=true;
+  try{ await fetch("/rules/add",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})}); }catch(_){}
+  inp.disabled=false; inp.focus(); loadRules();
 }
 
 /* ---------- profile ---------- */
@@ -3032,6 +3068,7 @@ document.querySelectorAll("[data-view]").forEach(b=>b.addEventListener("click",(
 // back returns to the active call if one is running, otherwise the landing page
 document.querySelectorAll("[data-back]").forEach(b=>b.addEventListener("click",()=>showView(started?"call":"landing")));
 document.querySelectorAll(".subseg").forEach(b=>b.addEventListener("click",()=>showMemorySub(b.dataset.sub)));
+$("#ruleForm").addEventListener("submit",(e)=>{ e.preventDefault(); addRule(); });
 $("#chatDetailBack").addEventListener("click",()=>openMemory("chats"));
 // in-call menu (Memory / Profile / Settings) without leaving the call
 const callMenuBtn=$("#callMenuBtn"), callMenu=$("#callMenu");

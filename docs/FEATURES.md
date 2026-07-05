@@ -127,8 +127,12 @@ short version; below it, the complete inventory.
   threshold, vector + keyword search selects what's relevant to this turn.
 - **Conversation recaps** — each session is summarized into an episodic layer,
   surfaced only when relevant, so "what were we talking about last time?" works.
+- **Standing rules (L4 guardrails)** — plain-language rules the assistant always
+  follows ("call me Alex", "never suggest alcohol", "keep replies short"). Stored
+  separately from facts and injected into every reply unconditionally — they're
+  never smoothed away, forgotten, or subject to relevance gating.
 - **Memory hub** — Timeline (every turn with the facts learned in that moment),
-  Past chats, Memories (dated, newest first), and Reference files in one place.
+  Rules, Past chats, Memories (dated, newest first), and Reference files in one place.
 - **Memory tools** — "Smooth memories" proposes cleanups (garbled phrasing,
   duplicates, contradictions, junk) that you approve, edit, or dismiss one by
   one; plus recall tests and re-review of past conversations.

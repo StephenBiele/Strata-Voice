@@ -1470,6 +1470,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         documents=_doc_context(text), profile=_profile_context(), persona=s["persona"],
         recent=recent, forgotten=_forgotten, emotion=_emotion_active() and speak,
         web=web_ctx, web_fresh=web_fresh,
+        rules=[r["text"] for r in vc.list_rules(_strata)],   # L4: always-on standing rules
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
@@ -1776,6 +1777,11 @@ class Handler(BaseHTTPRequestHandler):
             # ids are 64-bit ints; stringify so JS doesn't round them past 2^53.
             mem = [{"id": str(m["id"]), "text": m["text"], "t": m.get("t")} for m in mem]
             return self._json(200, {"memories": mem})
+        if u.path == "/rules":
+            with _lock:
+                rules = vc.list_rules(_strata)
+            rules = [{"id": str(r["id"]), "text": r["text"], "t": r.get("t")} for r in rules]
+            return self._json(200, {"rules": rules})
         if u.path == "/timeline":
             with _lock:
                 tl = vc.build_timeline(_strata)
@@ -2083,6 +2089,21 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     return self._json(200, {"ok": False, "error": str(e)})
             return self._json(200, {"ok": ok})
+        if u.path == "/rules/add":
+            body = json.loads(self._body() or b"{}")
+            with _lock:
+                r = vc.add_rule(_strata, str(body.get("text", "")))
+            if not r:
+                return self._json(200, {"ok": False, "error": "couldn't add that rule"})
+            return self._json(200, {"ok": True, "rule": {"id": str(r["id"]), "text": r["text"]}})
+        if u.path == "/rules/delete":
+            body = json.loads(self._body() or b"{}")
+            with _lock:
+                try:
+                    _strata.delete_memory(int(body.get("id")), mode="hard")
+                except Exception as e:
+                    return self._json(200, {"ok": False, "error": str(e)})
+            return self._json(200, {"ok": True})
         if u.path == "/session/delete":
             body = json.loads(self._body() or b"{}")
             sid = str(body.get("id", ""))
