@@ -436,11 +436,25 @@ def _now_context() -> str:
     return f"Current date and time: {stamp} ({tz})."
 
 
+# Below this many known facts, the assistant is "still getting to know" the user
+# and leans slightly curious; past it, the nudge drops and it just converses.
+CURIOSITY_MAX_FACTS = 8
+CURIOSITY_PROMPT = (
+    "GETTING TO KNOW THEM: you still know only a little about this person. When "
+    "there's a natural opening, show genuine interest with AT MOST ONE light "
+    "follow-up question — ideally tied to something they just said or something "
+    "you already know (\"you mentioned Molly, is she your only pet?\"). Never "
+    "interrogate, never stack questions, never let it feel like a survey — "
+    "especially out loud. One warm, curious touch, then let the conversation "
+    "breathe. This fades on its own as you learn more about them."
+)
+
+
 def build_messages(history, memories, documents=None, profile=None,
                    persona: str | None = None, recent=None,
                    forgotten=None, emotion: bool = False,
                    web: str | None = None, web_fresh: bool = False,
-                   rules=None) -> list[dict]:
+                   rules=None, getting_to_know: bool = False) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
 
     `persona` is the user-editable part; the fixed MEMORY_DIRECTIVES are
@@ -463,6 +477,8 @@ def build_messages(history, memories, documents=None, profile=None,
     system += ("\n\n" + _now_context() +
                " Use this for time-aware replies (greetings, time of day, \"today\"); "
                "don't state the date or time unless it's relevant.")
+    if getting_to_know:
+        system += "\n\n" + CURIOSITY_PROMPT
     system += f"\n\nCURRENT MEMORIES:\n{mem_block}"
     if forgotten:
         joined = "\n".join(f"- {f}" for f in forgotten)

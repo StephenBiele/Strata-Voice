@@ -1471,6 +1471,8 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         recent=recent, forgotten=_forgotten, emotion=_emotion_active() and speak,
         web=web_ctx, web_fresh=web_fresh,
         rules=[r["text"] for r in vc.list_rules(_strata)],   # L4: always-on standing rules
+        # lean curious only while memory is still thin — tapers off as it fills
+        getting_to_know=len(mem) < vc.CURIOSITY_MAX_FACTS,
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0
