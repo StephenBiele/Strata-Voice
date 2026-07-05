@@ -782,7 +782,7 @@ def _backfill_recaps() -> None:
                     facts = vc.harvest_session_facts(s["turns"], existing, _mem_llm_cfg())
                     if facts:
                         with _lock:
-                            added = vc.add_facts(bf, facts)
+                            added = vc.add_harvested_facts(bf, facts)   # source-linked
                         if added:
                             print("[memory] harvested (backfill):", added)
                 except Exception as e:
@@ -1350,7 +1350,7 @@ def _recap_session(sess: dict) -> None:
         facts = vc.harvest_session_facts(sess["turns"], existing, _mem_llm_cfg())  # slow, off-lock
         if facts:
             with _lock:
-                added = vc.add_facts(_strata, facts)
+                added = vc.add_harvested_facts(_strata, facts)   # source-linked
             if added:
                 print("[memory] harvested:", added)
     except Exception as e:

@@ -1050,7 +1050,12 @@ Facts are read aloud by a voice, so spell everything out ("Arvada, Colorado" —
 Never begin a fact with "The user" — start with the verb or noun ("Has a dog named Molly", "Getting into bouldering").
 A one-time outing or errand ("went to the park", "was at Cherry Creek today") is NOT durable — keep an activity \
 only when it shows an ongoing interest or habit ("Getting into bouldering").
-Return ONLY a JSON array of short factual strings in the third person.
+ONLY capture facts the USER stated about themselves or explicitly confirmed. This is critical:
+- IGNORE anything the ASSISTANT said, suggested, guessed, or asked — the assistant's words are never facts about the user. (If the assistant says "you should grab a coffee for the drive" that is NOT "drinks coffee".)
+- IGNORE anything the user negated, declined, corrected, doubted, or dismissed. Watch for negation: "that wouldn't be good", "no", "not really", "actually no", "I don't" all mean DON'T store it — and never store the opposite of what the user rejected.
+- A fact only counts if you can point to the user's own words for it.
+For EACH fact, return the short verbatim USER quote it comes from, so it can be checked.
+Return ONLY a JSON array of objects: [{{"fact": "<clean third-person fact>", "quote": "<the user's own words it came from>"}}].
 Include: preferences, relationships, family, pets, job, location, hobbies, ongoing projects, \
 upcoming commitments (interviews, appointments, deadlines), notable experience and accomplishments.
 Exclude: questions, tests of the assistant, requests to remember/forget, anything about the assistant \
@@ -1067,11 +1072,14 @@ JSON array:"""
 
 
 def harvest_session_facts(turns: list[dict], existing: list[str],
-                          cfg: dict | None = None) -> list[str]:
+                          cfg: dict | None = None) -> list[dict]:
     """End-of-conversation fact harvest: one extraction pass over the WHOLE
-    transcript (both sides), so facts scattered across turns get assembled into
-    complete memories that per-turn extraction can't see. Pure function — the
-    caller decides how to store the result."""
+    transcript, so facts scattered across turns get assembled into complete
+    memories that per-turn extraction can't see. Returns [{fact, quote}] — the
+    quote is the user's own words the fact is grounded in (the prompt only
+    captures user-stated/confirmed facts, so the assistant's suggestions and
+    anything the user negated never become facts). Pure function; the caller
+    stores via add_harvested_facts, which uses the quote to source-link."""
     if not turns:
         return []
     prompt = _HARVEST_PROMPT.format(
@@ -1090,7 +1098,65 @@ def harvest_session_facts(turns: list[dict], existing: list[str],
         arr = json.loads(m)
     except Exception:
         return []
-    return [_clean(x)[:160] for x in arr if isinstance(x, str) and len(_clean(x)) > 2][:8]
+    out = []
+    for x in arr:
+        if isinstance(x, dict) and x.get("fact"):
+            out.append({"fact": _clean(str(x["fact"]))[:160],
+                        "quote": _clean(str(x.get("quote", "")))})
+        elif isinstance(x, str):                      # tolerate the old flat shape
+            out.append({"fact": _clean(x)[:160], "quote": ""})
+    return [o for o in out if len(o["fact"]) > 2][:8]
+
+
+def _match_event(events: list[dict], quote: str) -> int | None:
+    """The L0 user-turn event a harvested quote came from: exact substring first,
+    then word-overlap ≥0.6. None if nothing matches (fact still stores, unlinked)."""
+    if not quote:
+        return None
+    ql = quote.lower()
+    for e in events:
+        if ql in e["text"].lower():
+            return e["id"]
+    qw = {w for w in re.findall(r"[a-z0-9]+", ql) if len(w) > 2}
+    if not qw:
+        return None
+    best, best_score = None, 0.0
+    for e in events:
+        ew = {w for w in re.findall(r"[a-z0-9]+", e["text"].lower()) if len(w) > 2}
+        if ew:
+            score = len(qw & ew) / len(qw)
+            if score > best_score:
+                best, best_score = e["id"], score
+    return best if best_score >= 0.6 else None
+
+
+def add_harvested_facts(strata, harvested: list[dict]) -> list[str]:
+    """Store harvested {fact, quote} items — but ONLY when the quote grounds to a
+    real user turn. This is the guard against exactly what went wrong: a fact the
+    user never said (the assistant's, a negation flipped positive, or the model
+    parroting a prompt example) has no matching user utterance, so it's dropped
+    rather than stored untraceable. Survivors are source-linked to that turn."""
+    if not harvested:
+        return []
+    events = list_events(strata)
+    memories = list_memories(strata)
+    added = []
+    for item in harvested:
+        fact = _clean(item.get("fact", ""))[:160]
+        if len(fact) < 3:
+            continue
+        ev_id = _match_event(events, item.get("quote", ""))
+        if ev_id is None:
+            print(f"[memory] harvest dropped (no user source): {fact!r}")
+            continue
+        before = {m["text"] for m in memories}
+        rid = _add_or_supersede(strata, fact, memories)
+        memories.append({"id": rid or -1, "text": fact})
+        if rid:
+            _link_source(strata, rid, ev_id)
+        if fact not in before:
+            added.append(fact)
+    return added
 
 
 _STORE_POLISH_PROMPT = """You are cleaning up a voice assistant's long-term memory store. Below are the \
