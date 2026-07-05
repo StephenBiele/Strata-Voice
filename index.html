@@ -452,6 +452,21 @@
     display:flex; align-items:center; justify-content:center;
   }
   .chatdrawer-close:hover{ background:oklch(0.97 0.02 120); color:var(--ink); }
+  /* copy-conversation button sits just left of the close button */
+  .chatdrawer-head .drawerseg{ margin-right:auto; }
+  .chatdrawer-copy{
+    appearance:none; border:1px solid var(--line); background:oklch(0.99 0.01 120 / .6); cursor:pointer;
+    width:2.25rem; height:2.25rem; border-radius:50%; color:var(--ink-soft); flex:none;
+    display:flex; align-items:center; justify-content:center; transition:background .2s, color .2s;
+  }
+  .chatdrawer-copy svg{ width:1.05rem; height:1.05rem; }
+  .chatdrawer-copy:hover{ background:oklch(0.97 0.02 120); color:var(--ink); }
+  .chatdrawer-copy.copied{ color:var(--sage-deep); border-color:var(--sage-deep); }
+  /* readable content is always selectable — WKWebView (the Mac app) otherwise
+     blocks it, so make the intent explicit on transcripts, memories, captions */
+  .bubble, .drawerbody, .caption, .memitem, .ttext, .tfact, .panelbody{
+    -webkit-user-select:text; user-select:text;
+  }
   .drawerbody{
     flex:1; overflow-y:auto; padding:1rem 1rem 1.4rem;
     display:flex; flex-direction:column; gap:.7rem;
@@ -1052,6 +1067,9 @@
           <button class="dseg active" id="segCurrent" role="tab" aria-selected="true"><span class="livedot"></span>Current</button>
           <button class="dseg" id="segHistory" role="tab" aria-selected="false">Past chats</button>
         </div>
+        <button class="chatdrawer-copy" id="drawerCopy" title="Copy this conversation" aria-label="Copy this conversation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        </button>
         <button class="chatdrawer-close" id="historyClose" aria-label="Hide conversation">×</button>
       </div>
       <div class="drawerbody" id="pastChatsDrawerBody">
@@ -3069,6 +3087,33 @@ document.querySelectorAll("[data-view]").forEach(b=>b.addEventListener("click",(
 document.querySelectorAll("[data-back]").forEach(b=>b.addEventListener("click",()=>showView(started?"call":"landing")));
 document.querySelectorAll(".subseg").forEach(b=>b.addEventListener("click",()=>showMemorySub(b.dataset.sub)));
 $("#ruleForm").addEventListener("submit",(e)=>{ e.preventDefault(); addRule(); });
+/* clipboard with a selection+execCommand fallback (some WKWebView paths reject
+   the async clipboard API) */
+async function copyText(text){
+  try{ await navigator.clipboard.writeText(text); return true; }
+  catch(_){
+    try{ const ta=document.createElement("textarea"); ta.value=text;
+      ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta);
+      ta.select(); const ok=document.execCommand("copy"); ta.remove(); return ok; }
+    catch(__){ return false; }
+  }
+}
+/* Copy the whole visible conversation — the reliable answer to "I couldn't
+   select the transcript in the Mac app." */
+$("#drawerCopy").addEventListener("click", async ()=>{
+  const bubbles=[...document.querySelectorAll("#pastChatsDrawerBody .bubble")];
+  const lines=bubbles.map(b=>{
+    const who=b.classList.contains("user")?"You":ASSISTANT_NAME;
+    const txt=((b.querySelector(".btext")||{}).textContent||"").trim();
+    return txt?`${who}: ${txt}`:"";
+  }).filter(Boolean);
+  if(!lines.length) return;
+  const btn=$("#drawerCopy");
+  if(await copyText(lines.join("\n\n"))){
+    btn.classList.add("copied"); btn.title="Copied ✓";
+    setTimeout(()=>{ btn.classList.remove("copied"); btn.title="Copy this conversation"; }, 1300);
+  }
+});
 $("#chatDetailBack").addEventListener("click",()=>openMemory("chats"));
 // in-call menu (Memory / Profile / Settings) without leaving the call
 const callMenuBtn=$("#callMenuBtn"), callMenu=$("#callMenu");
