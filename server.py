@@ -103,6 +103,9 @@ DEFAULT_SETTINGS = {
     # Memory jobs run behind the conversation, so a bigger, slower model can
     # write more accurate memories without touching voice latency.
     "memory_model": "",
+    # Proactive heads-up: at the start of a conversation, gently bring up a
+    # genuine upcoming commitment (an interview, appointment, deadline…).
+    "proactive": True,
     # Web lookups (off by default: queries leave the machine, so it's opt-in).
     # When on, a quick pre-turn check decides if the question needs fresh info;
     # results live in memory for ~5 minutes and are never written to disk.
@@ -125,7 +128,7 @@ SETTINGS_FIELDS = (
     "tts_voice", "tts_speed", "tts_engine", "tts_emotion", "tts_cb_voice",
     "tts_chunking", "tts_trim", "tts_gap_ms", "tts_smoothing",
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
-    "asr_model", "asr_backend", "mic_device", "memory_model", "web_search",
+    "asr_model", "asr_backend", "mic_device", "memory_model", "web_search", "proactive",
     "vad_enabled", "vad_barge_in", "vad_threshold", "vad_silence_ms",
     "vad_prefix_ms", "vad_min_speech_ms", "debug_settings",
 )
@@ -1396,6 +1399,14 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     mem = vc.list_memories(_strata)
     mem_text = vc.select_memories(_strata, text, semantic=_embedder is not None, mems=mem)
     recent = vc.relevant_recaps(_strata, text, _embedder)   # gated by relevance
+    # Proactive: only on the FIRST exchange of a session, gently surface a genuine
+    # upcoming commitment. One check, first turn only — no ongoing nagging.
+    proactive = None
+    first_turn = not any(m["role"] == "assistant" for m in _history)
+    if s.get("proactive") and first_turn:
+        proactive = vc.upcoming_nudge(mem, _mem_llm_cfg())
+        if proactive:
+            print(f"[proactive] heads-up: {proactive!r}")
     # Web lookup (opt-in): a quick gate decides if this turn needs fresh info
     # ("double check that", store hours, scores…). New results join the
     # short-lived cache; anything still fresh is injected either way so
@@ -1473,6 +1484,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
         rules=[r["text"] for r in vc.list_rules(_strata)],   # L4: always-on standing rules
         # lean curious only while memory is still thin — tapers off as it fills
         getting_to_know=len(mem) < vc.CURIOSITY_MAX_FACTS,
+        proactive=proactive,   # first-turn upcoming-commitment heads-up (opt-in)
     )
 
     full, emitted_audio, emitted_tok, seq = "", 0, 0, 0

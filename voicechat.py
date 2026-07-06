@@ -463,7 +463,8 @@ def build_messages(history, memories, documents=None, profile=None,
                    persona: str | None = None, recent=None,
                    forgotten=None, emotion: bool = False,
                    web: str | None = None, web_fresh: bool = False,
-                   rules=None, getting_to_know: bool = False) -> list[dict]:
+                   rules=None, getting_to_know: bool = False,
+                   proactive: str | None = None) -> list[dict]:
     """Compose the full system prompt + history into a messages list.
 
     `persona` is the user-editable part; the fixed MEMORY_DIRECTIVES are
@@ -488,6 +489,13 @@ def build_messages(history, memories, documents=None, profile=None,
                "don't state the date or time unless it's relevant.")
     if getting_to_know:
         system += "\n\n" + CURIOSITY_PROMPT
+    if proactive:
+        system += ("\n\nGENTLE HEADS-UP (only right now, at the very start of this conversation): "
+                   "the user has " + proactive + " coming up. If they open with a greeting or "
+                   "anything open-ended, that's the ideal moment — warmly bring it up and offer light "
+                   "help. If they open with a specific unrelated request, answer that first, then add "
+                   "a brief one-line heads-up. Mention it at most once, and never raise it again later "
+                   "in the conversation.")
     system += f"\n\nCURRENT MEMORIES:\n{mem_block}"
     if forgotten:
         joined = "\n".join(f"- {f}" for f in forgotten)
@@ -912,6 +920,59 @@ def recall_memories(strata, query: str, top_k: int = RECALL_TOP_K) -> list[str]:
 # boost memories from that window to the front (a reorder, never a hard filter —
 # the two-pass lesson). Env-gated for A/B against the benchmark.
 TEMPORAL = os.environ.get("VOICE_TEMPORAL", "1") != "0"
+
+
+# Proactive surfacing: at the START of a conversation, gently bring up a genuine
+# upcoming commitment ("your interview with Globex is Thursday — want to prep?").
+# The relative-date problem (a fact says "Thursday", but is it still ahead?) is
+# solved by handing the model today's date + when each fact was mentioned and
+# letting it resolve. Conservative by design — most turns surface nothing.
+_COMMIT_RE = re.compile(
+    r"\b(interview|appointment|meeting|deadline|due|wedding|flight|trip|exam|test|"
+    r"reservation|party|concert|game|visit|conference|class|checkup|surgery|dentist|"
+    r"doctor|presentation|graduation|birthday|anniversary|move|moving|closing|hearing)\b", re.I)
+
+_UPCOMING_PROMPT = """Today is {today}. Below are things the user mentioned, each with WHEN they said it. \
+Find the SINGLE most relevant SPECIFIC upcoming event in the near future (roughly the next 10 days). \
+Resolve relative dates from when it was said: "interview Thursday" said last Monday, with today being \
+Wednesday, means this Thursday (tomorrow).
+If there is a genuine upcoming one, reply with a SHORT description resolved to a concrete day — e.g. \
+"a job interview with Globex this Thursday" or "a dentist appointment tomorrow". Nothing else.
+If nothing is clearly upcoming — everything is a stable fact, already passed, or too vague — reply with \
+exactly: NONE
+
+Mentioned:
+{items}
+
+Upcoming (or NONE):"""
+
+
+def upcoming_nudge(memories: list[dict], cfg: dict | None = None) -> str | None:
+    """A short resolved description of one genuine upcoming commitment to bring up
+    at the start of a conversation, or None. Considers only recently-mentioned,
+    commitment-type memories (so stable facts and old events never trigger it)."""
+    now = datetime.now()
+    cutoff = int(now.timestamp() * 1000) - 21 * 86_400_000   # only recent mentions
+    cands = [m for m in memories
+             if (m.get("t") or 0) >= cutoff and _COMMIT_RE.search(m.get("text", ""))]
+    if not cands:
+        return None
+    today = now.strftime("%A, %B ") + f"{now.day}, {now.year}"
+    items = "\n".join(
+        f"- (mentioned {datetime.fromtimestamp((m['t'] or 0) / 1000).strftime('%A, %B ')}"
+        f"{datetime.fromtimestamp((m['t'] or 0) / 1000).day}) {m['text']}"
+        for m in cands)
+    try:
+        raw = llm_complete([{"role": "user",
+                             "content": _UPCOMING_PROMPT.format(today=today, items=items)}],
+                           _mem_cfg(cfg))
+    except Exception as e:
+        print(f"[proactive] check failed: {e}")
+        return None
+    line = (raw or "").strip().splitlines()[0].strip() if raw else ""
+    if not line or line.upper().startswith("NONE") or len(line) < 6:
+        return None
+    return line[:160]
 
 
 def _reltime(ts_ms: int, now_ms: int) -> str:

@@ -123,6 +123,10 @@ scattered across turns into complete memories. Deletion is instant and rule-base
 anything you forget mid-call won't be brought up again. See
 [How memory works](#how-memory-works).
 
+**Proactive heads-up** — at the start of a conversation it can gently remind you of
+something coming up — an interview, an appointment, a deadline — and offer to help.
+Just once, only when there's genuinely something soon (on by default; toggle in Settings).
+
 **Memory hub** — Timeline (every turn, with the facts learned in that moment hanging off
 it), Past chats, Memories, and Reference files, in one place. Memory tools propose
 cleanups you approve one by one, run recall tests, and re-review past conversations.

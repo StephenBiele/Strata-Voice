@@ -1215,6 +1215,15 @@
       <p class="hint" style="margin:-.4rem 0 1rem">Memory works with the built-in model or any OpenAI-compatible endpoint, using any provider, hosted locally or on another machine on your network. Saving facts, recall, recaps, and end-of-call review all run through it.</p>
       <div id="setModel"></div>
 
+      <h3 class="subhead">Memory</h3>
+      <div class="switchrow">
+        <div>
+          <div class="switchlabel">Proactive heads-up</div>
+          <div class="switchsub">At the start of a conversation, it can gently remind you of something coming up — an interview, an appointment, a deadline — and offer to help. Just once, only when there's genuinely something soon.</div>
+        </div>
+        <button class="switch" id="set_proactive" role="switch" aria-checked="true"><span class="knob"></span></button>
+      </div>
+
       <h3 class="subhead">Web</h3>
       <div class="switchrow">
         <div>
@@ -1915,6 +1924,7 @@ async function loadSettings(){
   $("#set_persona").value=s.persona||"";
   setSwitch($("#set_thinking"), !!s.thinking);
   setSwitch($("#set_websearch"), !!s.web_search);
+  setSwitch($("#set_proactive"), s.proactive!==false);
   // voice engine + expressive emotion
   $("#set_ttsengine").value=s.tts_engine||"kokoro";
   setSwitch($("#set_emotion"), s.tts_emotion!==false);
@@ -2143,6 +2153,7 @@ async function saveSettings(){
     persona:$("#set_persona").value,
     thinking:$("#set_thinking").getAttribute("aria-checked")==="true",
     web_search:$("#set_websearch").getAttribute("aria-checked")==="true",
+    proactive:$("#set_proactive").getAttribute("aria-checked")==="true",
     tts_engine:$("#set_ttsengine").value,
     tts_emotion:$("#set_emotion").getAttribute("aria-checked")==="true",
     tts_cb_voice:$("#set_cbvoice").value||"builtin",
@@ -3269,6 +3280,10 @@ $("#set_thinking").addEventListener("click", (e)=>{
 });
 $("#upd_check").addEventListener("click", checkUpdates);
 $("#set_websearch").addEventListener("click",(e)=>{
+  const on=e.currentTarget.getAttribute("aria-checked")==="true";
+  setSwitch(e.currentTarget, !on);
+});
+$("#set_proactive").addEventListener("click",(e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
   setSwitch(e.currentTarget, !on);
 });

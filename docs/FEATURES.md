@@ -150,6 +150,11 @@ short version; below it, the complete inventory.
 - **Time-aware recall** — "what did I do yesterday?", "what have I been up to
   lately?" surface memories from that actual time window, each tagged with when
   it happened, so two similar events from different times don't get confused.
+- **Proactive heads-up** (on by default, toggleable) — at the start of a
+  conversation, it can gently remind you of a genuine upcoming commitment (an
+  interview, appointment, deadline) and offer to help. Just once, only when
+  there's really something soon — resolved against today's date, so a "Thursday"
+  that already passed never resurfaces.
 - **Works with any backend** — the full memory system runs through whatever
   model you connect, local or remote (verified end-to-end).
 - **Separate memory model** — optionally use a different model for background
