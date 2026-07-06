@@ -1334,6 +1334,13 @@ NEVER begin with "The user" — start with the verb or noun ("Explained…", "Ha
 ("Went to the park today"), or an exact duplicate of another memory (delete the worse-written one).
 Durable interests survive: "Getting into bouldering" is a keep even though a single park visit is not.
 
+CONSOLIDATE FRAGMENTS: when two or more memories are pieces of the SAME fact \
+("Has an interview Tuesday" + "Interviewing at Acme"), rewrite ONE of them into the \
+single complete fact ("Has an interview Tuesday with Acme") and delete the other piece(s). \
+Only combine memories that truly describe the same thing — NEVER merge memories that differ \
+on a name, date, company, place, or number: two different interviews, two different trips, \
+and two different people each stay as their own separate memory.
+
 Return ONLY a JSON array of changes — memories to keep are simply omitted:
 [{{"n": 3, "action": "rewrite", "text": "..."}}, {{"n": 7, "action": "delete"}}]
 If everything is already clean, return [].

@@ -144,8 +144,12 @@ short version; below it, the complete inventory.
 - **Memory hub** — Timeline (every turn with the facts learned in that moment),
   Rules, Past chats, Memories (dated, newest first), and Reference files in one place.
 - **Memory tools** — "Smooth memories" proposes cleanups (garbled phrasing,
-  duplicates, contradictions, junk) that you approve, edit, or dismiss one by
-  one; plus recall tests and re-review of past conversations.
+  duplicates, junk, and combining fragments of the same fact into one) that you
+  approve or dismiss one by one; plus recall tests and re-review of past
+  conversations.
+- **Time-aware recall** — "what did I do yesterday?", "what have I been up to
+  lately?" surface memories from that actual time window, each tagged with when
+  it happened, so two similar events from different times don't get confused.
 - **Works with any backend** — the full memory system runs through whatever
   model you connect, local or remote (verified end-to-end).
 - **Separate memory model** — optionally use a different model for background
