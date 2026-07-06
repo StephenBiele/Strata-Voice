@@ -23,6 +23,11 @@ The short version:
 - **Before committing any data-touching change, run `./tests/run.sh`** (spins a
   throwaway server on a throwaway DB) and keep it green. Add a test when you
   add a data path.
+- **Memory quality** has its own benchmark: `.venv/bin/python tests/memory_benchmark.py`
+  (needs Ollama) plants close-in-time events, fires vague queries, and scores
+  recall + collision deterministically. Run it before/after any change to
+  extraction, recall, ranking, or the memory prompts — it's the North Star for
+  disambiguation. Scenarios live in `tests/benchmark_scenarios.json`.
 
 ## Conventions
 

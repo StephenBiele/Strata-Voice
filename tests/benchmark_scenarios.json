@@ -1,0 +1,82 @@
+{
+  "_note": "Disambiguation scenarios for the memory benchmark. Each plants known facts for two (or more) close-in-time events, then fires a vague query. Scoring is deterministic keyword matching against ground truth we constructed here — no LLM judges anything, so there's no LLM-grading-LLM circularity. Real datasets (LongMemEval, LoCoMo) can be converted into this same shape later.",
+  "filler": [
+    "Lives in Arvada, Colorado",
+    "Has a dog named Molly and a cat named Pixel",
+    "Works as a software engineer",
+    "Enjoys bouldering on weekends",
+    "Drinks tea in the morning",
+    "Is learning to play the guitar",
+    "Has a younger brother named Chris",
+    "Prefers window seats on flights",
+    "Is allergic to shellfish",
+    "Drives a blue Subaru",
+    "Reads science fiction novels",
+    "Supports the Denver Nuggets"
+  ],
+  "scenarios": [
+    {
+      "id": "weekend-people",
+      "kind": "topical (who was where)",
+      "events": [
+        {"utterance": "On Saturday I went to Dave's barbecue with Sarah, we had burgers and Dave showed off his new smoker",
+         "facts": ["Went to Dave's barbecue on Saturday", "Sarah came to the Saturday barbecue", "Dave has a new smoker"]},
+        {"utterance": "On Sunday I watched the fireworks downtown with my mom, we got there late and parking was a nightmare",
+         "facts": ["Watched fireworks downtown on Sunday with Mom", "Parking downtown on Sunday was difficult"]}
+      ],
+      "query": "Who was with me at the barbecue again?",
+      "target_keys": ["dave", "sarah"],
+      "distractor_keys": ["mom", "fireworks"]
+    },
+    {
+      "id": "two-interviews",
+      "kind": "which-of-two-similar",
+      "events": [
+        {"utterance": "I have an interview Tuesday with Acme for a backend engineering role",
+         "facts": ["Has an interview Tuesday with Acme for a backend engineering role"]},
+        {"utterance": "I also have an interview Thursday with Globex for a data analyst role",
+         "facts": ["Has an interview Thursday with Globex for a data analyst role"]}
+      ],
+      "query": "What was the Thursday interview for again?",
+      "target_keys": ["globex", "data"],
+      "distractor_keys": ["acme", "backend"]
+    },
+    {
+      "id": "temporal-appointments",
+      "kind": "temporal (yesterday vs last week) — hard for pure semantic recall",
+      "events": [
+        {"utterance": "I had a dentist appointment yesterday, just a routine cleaning",
+         "facts": ["Had a dentist appointment yesterday for a routine cleaning"]},
+        {"utterance": "Last week I saw the eye doctor and got a new glasses prescription",
+         "facts": ["Saw the eye doctor last week and got a new glasses prescription"]}
+      ],
+      "query": "What was that appointment I had yesterday?",
+      "target_keys": ["dentist"],
+      "distractor_keys": ["eye", "glasses"]
+    },
+    {
+      "id": "two-trips",
+      "kind": "which-of-two-similar (place)",
+      "events": [
+        {"utterance": "I flew to Portland for Sarah's wedding, it rained the whole weekend",
+         "facts": ["Flew to Portland for Sarah's wedding"]},
+        {"utterance": "I went to Seattle for a work conference the month before",
+         "facts": ["Went to Seattle for a work conference"]}
+      ],
+      "query": "Which city did I go to for the wedding?",
+      "target_keys": ["portland"],
+      "distractor_keys": ["seattle", "conference"]
+    },
+    {
+      "id": "control-unambiguous",
+      "kind": "control (should be easy — sanity check)",
+      "events": [
+        {"utterance": "My dog is named Biscuit, she's a corgi",
+         "facts": ["Has a corgi named Biscuit"]}
+      ],
+      "query": "What's my dog's name?",
+      "target_keys": ["biscuit"],
+      "distractor_keys": []
+    }
+  ]
+}
