@@ -121,11 +121,12 @@ Ollama starts if needed, the server launches, and your browser opens to
 **Hands-free by default** — just talk: on-device Silero VAD detects when you start and
 stop speaking and sends your turn automatically. Talking over a reply **interrupts it**
 (barge-in). A **mute button** (red when muted) releases the mic entirely — the OS
-indicator goes dark until you unmute. Every knob is tunable in plain language — voice
-sensitivity, the pause that ends your turn, lead-in padding, minimum speech length — and
-a debug switch adds an **in-call live tuning panel** so you can dial it in while actually
-talking. Barge-in leans on your browser's echo cancellation: if it interrupts itself
-through speakers, use headphones.
+indicator goes dark until you unmute.
+
+Every knob is tunable in plain language — voice sensitivity, the pause that ends your
+turn, lead-in padding, minimum speech length — and a debug switch adds an **in-call
+live tuning panel** to dial it in while talking. Barge-in leans on your browser's echo
+cancellation: if it interrupts itself through the speakers, use headphones.
 
 **Don't want it listening? Mute or type** — the mute button pauses the conversation
 (and the call timer) and hands the mic back to the OS entirely, while a reply in
@@ -154,33 +155,36 @@ text share one session, one memory, one timeline.
 **Incognito** — a ghost toggle for off-the-record conversations: nothing is saved, while
 it still uses what it already knows.
 
-**Web lookups (optional, off by default)** — flip one switch and it can check the web
-when a question actually needs it: scores, store hours, news, or "can you double
-check that?" (it verifies its own previous claim). Weather questions skip search
-snippets entirely and pull **live forecast data** (Open-Meteo — keyless, like
-everything here). A quick pre-check decides whether to look anything up, answers stay
-to a sentence or two, a **sources chip** under each web answer lets you verify the
-links, and results live in memory for five minutes for follow-ups, then vanish — web
-content never touches the transcript or your memories. Searches go to DuckDuckGo (no
-API key), which is why it's opt-in: those queries leave your machine.
+**Web lookups (optional, off by default)** — flip one switch and it can check the
+web when a question actually needs it — scores, store hours, news, or "can you double
+check that?" (it re-verifies its own earlier claim). Weather skips search snippets
+and pulls **live forecast data** (Open-Meteo, keyless).
+
+A quick pre-check decides whether to look anything up, so most turns don't. Answers
+stay to a sentence or two, with a **sources chip** to verify the links. Results live
+in memory for five minutes for follow-ups, then vanish — web content never touches
+the transcript or your memories. Searches use DuckDuckGo (no API key), which is why
+it's opt-in: those queries leave your machine.
 
 **Reference files** — upload a PDF / DOCX / text file (a resume, notes, a story) and ask
 about it. Small files are given to the model whole; larger ones are chunked and embedded, so
 each question pulls in only the passages relevant to what you asked instead of blowing the
 context window.
 
-**Bring any model** — local Ollama out of the box, or any OpenAI-compatible endpoint
-(llama.cpp, LM Studio, vLLM, OpenAI, DeepSeek …), including one hosted on another
-machine on your network. **The full memory system rides whatever backend you pick** —
-explicit remembers, background fact extraction, end-of-call harvest, and recaps all
-run through your endpoint; a separate "Memory model" can be chosen from whatever that
-endpoint serves. Only semantic-recall embeddings stay on Ollama (point `OLLAMA_URL`
-or the Settings URL at any Ollama, local or remote; without one, recall falls back
-to inject-everything and memory keeps working). API keys live in the **macOS
-Keychain**, never on disk. Full LLM controls (temperature, top-p, max tokens,
-context window), a live speech-recognition picker (Parakeet, Whisper, Qwen3-ASR),
-voice cadence tuning with A/B preview, and a background-work pill so memory
-processing is never invisible.
+**Bring any model** — pick whatever brain you like:
+
+- **Any backend** — local Ollama out of the box, or any OpenAI-compatible endpoint
+  (llama.cpp, LM Studio, vLLM, OpenAI, DeepSeek …), including one on another machine
+  on your network. API keys live in the **macOS Keychain**, never on disk.
+- **Memory rides whatever you pick** — explicit remembers, background extraction,
+  end-of-call harvest, and recaps all run through your endpoint, and a separate
+  "Memory model" can be chosen from whatever it serves. Only semantic-recall
+  embeddings stay on Ollama (point `OLLAMA_URL` at any Ollama, local or remote;
+  without one, recall falls back to inject-everything and memory keeps working).
+- **Plus the usual controls** — temperature, top-p, max tokens, context window; a
+  live speech-recognition picker (Parakeet, Whisper, Qwen3-ASR); voice cadence
+  tuning with A/B preview; and a background-work pill so memory processing is
+  never invisible.
 
 **Expressive voice (optional)** — switch the voice engine to **Chatterbox-Turbo** in
 Settings and the assistant can perform natural laughs and sighs where they fit,
@@ -295,7 +299,7 @@ Most things live in **Settings**. Startup options are env vars:
 | `VOICE_PORT` | `8765` | web server port |
 | `VOICE_VAD_PORT` | `8766` | hands-free VAD channel |
 | `VOICE_NAME` | `Sage` | initial assistant name |
-| `VOICE_LLM_MODEL` | `qwen3.5:4b` | default Ollama model (the installer seeds your tier's pick) |
+| `VOICE_LLM_MODEL` | `qwen3.5:4b` | bare fallback only — the installer and Settings set your real model (`gemma4:e4b` Lightweight, `qwen3.6:latest` Recommended) |
 | `VOICE_ASR_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | ASR model id (or pick in Settings) |
 | `VOICE_TTS_CHATTERBOX` | `mlx-community/chatterbox-turbo-fp16` | expressive engine id (used when the voice engine is Chatterbox) |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint (chat + embeddings) — may be another machine on your network |
