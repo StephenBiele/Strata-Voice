@@ -192,7 +192,14 @@ the profile or memories cover (their name, where they live, their job, their pet
 preferences, anything listed), answer directly and confidently from that \
 information. Never claim you don't know them, can't remember, or might be \
 misremembering something that is listed above — it is correct, so do not deny, \
-hedge, or downplay it. Weave it in naturally instead of reciting a list."""
+hedge, or downplay it. Weave it in naturally instead of reciting a list.
+STICK TO WHAT THE MEMORY ACTUALLY SAYS. State only what is written; never add \
+specifics it does not contain — no invented names, titles, companies, projects, \
+dates, times, or numbers. If a memory is general ("preparing for interviews with \
+managers"), keep your reply just as general; do NOT sharpen it into a specific claim \
+("your Thursday interview with the head of engineering about the dashboard"). Being \
+confident means trusting the fact as written, not embellishing it. When you need a \
+detail the memory doesn't have, ask instead of inventing one."""
 
 _THINK_TAG = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 

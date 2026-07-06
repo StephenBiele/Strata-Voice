@@ -89,7 +89,7 @@ DEFAULT_SETTINGS = {
     "tts_gap_ms": 30,                    # consistent gap appended between chunks
     "tts_smoothing": "natural",          # 'natural' | 'verbatim' | 'flowing'
     # LLM generation controls
-    "llm_temperature": 0.6,              # 0 = deterministic, higher = more varied
+    "llm_temperature": 0.5,              # 0 = deterministic, higher = more varied (0.5 curbs confabulation)
     "llm_top_p": 1.0,                    # nucleus sampling (1 = off)
     "llm_max_tokens": 0,                 # cap on reply length (0 = voice-friendly default, ~200)
     "llm_num_ctx": 0,                    # context window, Ollama only (0 = model default)
@@ -114,7 +114,7 @@ DEFAULT_SETTINGS = {
     "vad_enabled": True,                 # hands-free is the default talk mode
     "vad_barge_in": True,                # speaking while it talks interrupts it
     "vad_threshold": 0.5,                # voice sensitivity (higher = stricter)
-    "vad_silence_ms": 500,               # pause length that ends your turn
+    "vad_silence_ms": 1000,              # pause length that ends your turn (higher = fewer mid-sentence cut-offs)
     "vad_prefix_ms": 500,                # lead-in kept from before speech was DETECTED
                                          # (detection can lag soft starts by 300-400ms,
                                          # so a short lead-in clips first words)

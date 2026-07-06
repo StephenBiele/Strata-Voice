@@ -465,7 +465,10 @@
 
   /* background-work pill (memory extraction / conversation wrap-up) */
   .bgpill{
-    position:fixed; right:.9rem; bottom:calc(.9rem + env(safe-area-inset-bottom)); z-index:50;
+    /* centered and lifted — the old bottom-right spot sat under the conversation
+       drawer and covered its controls */
+    position:fixed; left:50%; transform:translateX(-50%);
+    bottom:calc(clamp(1.4rem,4vh,2.6rem) + 7.5rem + env(safe-area-inset-bottom)); z-index:50;
     display:inline-flex; align-items:center; gap:.45rem;
     font-size:.76rem; font-weight:600; color:var(--ink-soft); letter-spacing:.02em;
     padding:.4rem .75rem; border-radius:999px; border:1px solid var(--line);
@@ -481,7 +484,7 @@
     animation:bgdot-pulse 1.4s ease-in-out infinite;
   }
   @keyframes bgdot-pulse{ 0%,100%{ opacity:.35; transform:scale(.85); } 50%{ opacity:1; transform:scale(1); } }
-  @keyframes bgpill-in{ from{ opacity:0; transform:translateY(6px); } to{ opacity:1; transform:none; } }
+  @keyframes bgpill-in{ from{ opacity:0; transform:translateX(-50%) translateY(6px); } to{ opacity:1; transform:translateX(-50%); } }
   /* "here's what I've learned" — a rare, tappable moment of trust, not a nag */
   .learnedcard{
     position:fixed; z-index:55; left:50%; top:calc(env(safe-area-inset-top) + 6.6rem);
@@ -1567,7 +1570,7 @@ let drawerPending=null, lastUserText="";
 /* hands-free (VAD) state */
 let handsFree=false;        // armed: mic stays open, speech start/stop auto-detected
 let vadBase="";             // http://host:vad_port (from GET /config)
-let vadCfg={ vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:500,
+let vadCfg={ vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:1000,
              vad_prefix_ms:500, vad_min_speech_ms:250 };  // refreshed at call start
 let vadRing=null;           // rolling 16 kHz Float32 buffer of the last ~30 s
 const VAD_RING_LEN=16000*30;
@@ -1814,7 +1817,7 @@ async function start(textMode=false){
              vad_min_speech_ms: parseInt(s.vad_min_speech_ms)||250 };
     vadDebugBtn.hidden=!s.debug_settings;
   }catch(_){
-    vadCfg={vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:500,
+    vadCfg={vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:1000,
             vad_prefix_ms:500, vad_min_speech_ms:250};
   }
   if(textMode){
@@ -2098,7 +2101,7 @@ async function loadSettings(){
   setSwitch($("#set_debug"), !!s.debug_settings);
   const vth=(s.vad_threshold!=null?s.vad_threshold:0.5);
   $("#set_vad_thresh").value=vth; $("#set_vad_threshval").textContent=Number(vth).toFixed(2).replace(/0$/,"");
-  const vsil=(s.vad_silence_ms!=null?s.vad_silence_ms:500);
+  const vsil=(s.vad_silence_ms!=null?s.vad_silence_ms:1000);
   $("#set_vad_silence").value=vsil; $("#set_vad_silenceval").textContent=vsil+" ms";
   const vpre=(s.vad_prefix_ms!=null?s.vad_prefix_ms:500);
   $("#set_vad_prefix").value=vpre; $("#set_vad_prefixval").textContent=vpre+" ms";
