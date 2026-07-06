@@ -688,19 +688,57 @@ def apply_directives(strata, reply: str, memories: list[dict],
     return "\n".join(spoken).strip()
 
 
+_DATEWORDS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+              "sunday", "january", "february", "march", "april", "may", "june",
+              "july", "august", "september", "october", "november", "december",
+              "today", "tomorrow", "yesterday", "tonight"}
+
+
+def _anchors(fact: str) -> set:
+    """The distinguishing specifics of a fact — proper nouns, numbers, days,
+    months. Two facts that differ on these are different facts, not restatements
+    of one ("interview with Acme" vs "interview with Globex")."""
+    out = set()
+    for i, tok in enumerate(fact.split()):
+        w = re.sub(r"[^\w:/-]", "", tok)
+        if not w:
+            continue
+        lw = w.lower()
+        if lw in _DATEWORDS or any(c.isdigit() for c in w):
+            out.add(lw)
+        elif i > 0 and w[0].isupper():            # proper noun (skip the sentence start)
+            out.add(lw)
+    return out
+
+
+def _same_fact(a: str, b: str) -> bool:
+    """Is `a` a restatement/refinement of `b` (merge) rather than a distinct fact
+    (keep both)? Requires strong word overlap AND compatible anchors: if each has
+    a distinguishing anchor the other lacks, they're different facts."""
+    sa = {w for w in a.lower().split() if len(w) > 3}
+    sb = {w for w in b.lower().split() if len(w) > 3}
+    union = sa | sb
+    jaccard = len(sa & sb) / len(union) if union else 0.0
+    # strong overlap, OR one fact's words contained in the other (an elaboration)
+    if jaccard < 0.5 and not (sa and (sa <= sb or sb <= sa)):
+        return False
+    aa, ab = _anchors(a), _anchors(b)
+    if aa and ab and not (aa <= ab or ab <= aa):   # conflicting specifics → distinct
+        return False
+    return True
+
+
 def _add_or_supersede(strata, fact: str, memories: list[dict]):
     """Write or update a fact. Returns the canonical record id of the written/
-    updated fact, or None on an exact duplicate (nothing changed)."""
+    updated fact, or None on an exact duplicate (nothing changed). Supersede only
+    when the new fact is genuinely a restatement of an existing one — anchor-aware,
+    so two distinct-but-similar facts (two interviews, two people) never clobber
+    each other."""
     fl = fact.lower()
-    # Crude topical overlap: if an existing memory shares >=2 significant
-    # words, treat this as an update (supersede) rather than a new fact.
-    sig = {w for w in fl.split() if len(w) > 3}
     for m in memories:
-        ml = m["text"].lower()
         if m["text"].lower() == fl:
             return None  # exact dup
-        overlap = sig & {w for w in ml.split() if len(w) > 3}
-        if len(overlap) >= 2:
+        if _same_fact(fact, m["text"]):
             try:
                 res = strata.supersede_memory(m["id"], fact)
                 print(f"  · memory updated: {m['text']!r} -> {fact!r}")

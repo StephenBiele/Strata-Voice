@@ -1,0 +1,61 @@
+{
+  "_note": "Write-side benchmark: how well does the system decide WHAT to store? Each scenario is a mini conversation replayed through the REAL write pipeline (per-turn extraction + end-of-call harvest). Scoring is deterministic keyword matching against ground truth: should_store (durable facts that must be captured), should_not_store (junk/fleeting/assistant-said/negated that must NOT be), and coexist (distinct-but-similar facts that must both survive dedup).",
+  "scenarios": [
+    {
+      "id": "durable-vs-fleeting",
+      "turns": [
+        {"role": "user", "content": "I just adopted a corgi named Biscuit, I'm so excited"},
+        {"role": "assistant", "content": "Congratulations! Corgis are wonderful. How's Biscuit settling in?"},
+        {"role": "user", "content": "Really well. Oh, I also ran to the grocery store this morning, total madhouse"},
+        {"role": "assistant", "content": "Sounds hectic. Anything else on your mind?"},
+        {"role": "user", "content": "Yeah, I work as a nurse at the children's hospital, long shifts lately"}
+      ],
+      "should_store": ["biscuit", "nurse"],
+      "should_not_store": ["grocery", "madhouse", "interview", "tuesday"],
+      "coexist": []
+    },
+    {
+      "id": "assistant-suggestion",
+      "turns": [
+        {"role": "user", "content": "I'm heading out to watch the fireworks tonight"},
+        {"role": "assistant", "content": "Nice! You should grab a coffee for the drive home, keep yourself alert."},
+        {"role": "user", "content": "Ha, maybe. It's about a 40 minute drive back"}
+      ],
+      "should_store": [],
+      "should_not_store": ["coffee"],
+      "coexist": []
+    },
+    {
+      "id": "negation",
+      "turns": [
+        {"role": "assistant", "content": "Want me to suggest a late-night snack routine?"},
+        {"role": "user", "content": "No, eating late at night is not something I want to do, it wrecks my sleep"}
+      ],
+      "should_store": [],
+      "should_not_store": ["eating late", "snack routine"],
+      "coexist": []
+    },
+    {
+      "id": "distinct-interviews-coexist",
+      "turns": [
+        {"role": "user", "content": "I have a job interview Tuesday with Acme for a backend engineering role"},
+        {"role": "assistant", "content": "Exciting! Good luck with the prep."},
+        {"role": "user", "content": "Thanks. I also have a second interview Thursday with Globex for a data analyst role"}
+      ],
+      "should_store": ["acme", "globex"],
+      "should_not_store": [],
+      "coexist": [["acme", "globex"]]
+    },
+    {
+      "id": "habit-vs-outing",
+      "turns": [
+        {"role": "user", "content": "I went for a walk in the park yesterday, it was pretty"},
+        {"role": "assistant", "content": "Sounds lovely."},
+        {"role": "user", "content": "I've actually started running every single morning, training for a half marathon"}
+      ],
+      "should_store": ["running", "marathon"],
+      "should_not_store": ["park"],
+      "coexist": []
+    }
+  ]
+}
