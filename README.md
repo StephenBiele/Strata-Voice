@@ -50,13 +50,30 @@ cd Strata-Voice
 ./install.sh
 ```
 
-The installer checks the prerequisites (Python 3.12, ffmpeg, Ollama — installed via
-Homebrew if missing), builds the Python environment, and asks which tier you want:
+The installer builds the Python environment and asks which tier you want:
 
-| Tier | Downloads | Fits | Chat + memory model |
-| :--- | :--- | :--- | :--- |
-| **Lightweight** | ~10 GB | 16 GB Macs | `gemma4:e4b` (fastest) |
-| **Recommended** | ~24 GB | 32 GB+ Macs | `qwen3.6:latest` (36B) |
+| Tier | Chat + memory model | Model download | **Total on disk** | Fits |
+| :--- | :--- | ---: | ---: | :--- |
+| **Lightweight** | `gemma4:e4b` (fastest) | 9.6 GB | **~14 GB** | 16 GB Macs |
+| **Recommended** | `qwen3.6:latest` (36B) | 23 GB | **~28 GB** | 32 GB+ Macs |
+
+Both tiers also include ~4.8 GB shared by everything: the Python environment
+(~1.6 GB), the on-device speech models — Parakeet speech-to-text (~2.3 GB),
+Kokoro voice (~340 MB), Silero VAD (~2 MB) — and the `nomic-embed-text` model for
+memory recall (~270 MB). The "Total on disk" column already includes it.
+
+### Prerequisites
+
+Python 3.12, ffmpeg, and Ollama — the installer checks for these and installs any
+that are missing via Homebrew. A few hundred MB combined, and often already
+present, so they're not counted in the totals above.
+
+### Optional add-ons (not installed by default)
+
+- **Chatterbox-Turbo** expressive voice engine — **+2.8 GB**, downloaded only if
+  you switch to it in Settings.
+- **Alternative speech-to-text** (Whisper, Qwen3-ASR) — a few hundred MB to
+  ~1.6 GB each, only if you pick one in Settings.
 
 Then:
 

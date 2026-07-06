@@ -99,8 +99,8 @@ TIER="${1:-}"
 if [ "$TIER" != "--light" ] && [ "$TIER" != "--recommended" ]; then
   echo
   printf "%sWhich install?%s\n" "$BOLD" "$RESET"
-  echo   "  [1] Lightweight  (~10 GB)  runs on 16 GB Macs; fastest replies"
-  echo   "  [2] Recommended  (~24 GB)  best replies (36B brain); needs a 32 GB+ Mac"
+  echo   "  [1] Lightweight  (~14 GB total)  runs on 16 GB Macs; fastest replies"
+  echo   "  [2] Recommended  (~28 GB total)  best replies (36B brain); needs a 32 GB+ Mac"
   printf "  choice [2]: "
   read -r CHOICE || CHOICE=""
   [ "$CHOICE" = "1" ] && TIER="--light" || TIER="--recommended"
@@ -158,7 +158,7 @@ fi
 
 # ---- 7. optional speech-model prewarm ------------------------------------------
 echo
-printf "Download the speech models now (~1 GB)? Otherwise the first launch does it. [Y/n]: "
+printf "Download the speech models now (~2.6 GB)? Otherwise the first launch does it. [Y/n]: "
 read -r WARM || WARM="n"
 if [ "$WARM" != "n" ] && [ "$WARM" != "N" ]; then
   info "Warming up Parakeet (speech-to-text) + Kokoro (voice)…"
