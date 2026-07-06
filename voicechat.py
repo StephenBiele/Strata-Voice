@@ -728,6 +728,24 @@ def _same_fact(a: str, b: str) -> bool:
     return True
 
 
+def _ground_facts(facts: list[str], source: str) -> list[str]:
+    """Drop extracted facts whose distinguishing anchors (dates, numbers, proper
+    nouns) aren't in the text the model actually saw. Catches invented specifics
+    — the per-turn extractor hallucinating "interview on Tuesday" from a turn
+    about nursing — without touching legitimately reworded facts, which carry no
+    invented anchor. Harvest already grounds via quotes; this is the same
+    discipline for the per-turn pass."""
+    src = source.lower()
+    kept = []
+    for f in facts:
+        missing = [a for a in _anchors(f) if a not in src]
+        if missing:
+            print(f"  · extract dropped (invented {missing}): {f!r}")
+            continue
+        kept.append(f)
+    return kept
+
+
 def _add_or_supersede(strata, fact: str, memories: list[dict]):
     """Write or update a fact. Returns the canonical record id of the written/
     updated fact, or None on an exact duplicate (nothing changed). Supersede only
@@ -1087,7 +1105,8 @@ def extract_facts_llm(user_text: str, existing: list[str], cfg: dict | None = No
     for x in arr:
         if isinstance(x, str) and len(_clean(x)) > 2:
             out.append(_clean(x)[:160])   # a memory is one short fact, never a paragraph
-    return out[:5]
+    # grounding: a fact's specific anchors must come from what the model saw
+    return _ground_facts(out, text + " " + (context or ""))[:5]
 
 
 def add_facts(strata, facts: list[str], event_id: int | None = None) -> list[str]:
