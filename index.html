@@ -607,6 +607,26 @@
     transition:background .2s var(--ease), transform .15s var(--ease);
   }
   .back:hover{ background:var(--surface-hi); transform:translateX(-2px); }
+  /* header overflow (⋯) menu — holds occasional memory-maintenance actions */
+  .hmenu{ position:relative; margin-left:auto; flex:none; }
+  .kebab{
+    appearance:none; border:1px solid var(--line); background:var(--surface-soft); cursor:pointer;
+    width:2.4rem; height:2.4rem; border-radius:50%; font-size:1.35rem; line-height:1; color:var(--ink-soft);
+    display:flex; align-items:center; justify-content:center; padding-bottom:.35rem; flex:none;
+    transition:background .2s var(--ease);
+  }
+  .kebab:hover{ background:var(--surface-hi); color:var(--ink); }
+  .hmenu-pop{
+    position:absolute; top:calc(100% + .45rem); right:0; z-index:40;
+    background:var(--surface); border:1px solid var(--line); border-radius:.95rem;
+    box-shadow:0 20px 46px -26px var(--shadow); padding:.4rem; min-width:212px;
+    display:flex; flex-direction:column; gap:.3rem;
+    transform-origin:top right; animation:popIn .16s var(--ease);
+  }
+  .hmenu-pop[hidden]{ display:none; }   /* beat .hmenu-pop's display:flex */
+  @keyframes popIn{ from{ opacity:0; transform:scale(.96) translateY(-3px); } to{ opacity:1; transform:none; } }
+  @media (prefers-reduced-motion:reduce){ .hmenu-pop{ animation:none; } }
+  .hmenu-pop .toolbtn{ width:100%; justify-content:flex-start; margin:0; }
   .panelbody{
     width:100%; max-width:680px; margin:0 auto; flex:1; overflow-y:auto;
     padding:.5rem clamp(1.2rem,5vw,2.4rem) 3rem;
@@ -1016,7 +1036,13 @@
     .panelhead{ padding:calc(1rem + env(safe-area-inset-top)) 1rem .8rem; }
     .panelbody{ padding-left:1rem; padding-right:1rem;
       padding-bottom:calc(1.6rem + env(safe-area-inset-bottom)); }
-    .subnav{ gap:.4rem; }
+    /* memory tabs: one swipeable row instead of 3 wrapped rows. Bleeds to the
+       panel edges so a half-clipped pill signals "scroll for more". */
+    .subnav{ flex-wrap:nowrap; overflow-x:auto; scroll-snap-type:x proximity;
+      gap:.4rem; margin:-.2rem -1rem 1.1rem; padding:.2rem 1rem .5rem;
+      -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+    .subnav::-webkit-scrollbar{ display:none; }
+    .subseg{ flex:none; scroll-snap-align:start; }
     .info .tip{ width:min(280px, 84vw); }
 
     /* landing + call breathing room / notch */
@@ -1418,7 +1444,15 @@
   <!-- PAST CHATS -->
   <!-- MEMORY HUB (Timeline · Past chats · Memories · Reference files) -->
   <section class="view panel" id="memory" hidden>
-    <header class="panelhead"><button class="back" data-back aria-label="Back">←</button><h2>Memory</h2></header>
+    <header class="panelhead"><button class="back" data-back aria-label="Back">←</button><h2>Memory</h2>
+      <div class="hmenu" id="memMenuWrap" hidden>
+        <button class="kebab" id="memMenuBtn" aria-haspopup="true" aria-expanded="false" aria-label="Memory tools" title="Memory tools">⋯</button>
+        <div class="hmenu-pop" id="memMenu" role="menu" hidden>
+          <button class="toolbtn" id="evalBtn" role="menuitem" title="Quiz the model on your profile and memories to check what it can actually recall">✓ Run recall test</button>
+          <button class="toolbtn" id="polishBtn" role="menuitem" title="Drafts cleanups — tidies awkward memories, drops junk, and combines fragments of the same fact into one — you review and approve each change before anything happens">✨ Smooth memories</button>
+        </div>
+      </div>
+    </header>
     <div class="panelbody">
       <div class="subnav" role="tablist" aria-label="Memory sections">
         <button class="subseg active" data-sub="memories" role="tab" aria-selected="true">Memories</button>
@@ -1438,10 +1472,6 @@
       </section>
 
       <section class="subsection" id="sub-memories" hidden>
-        <div class="toolbar">
-          <button class="toolbtn" id="evalBtn" title="Quiz the model on your profile and memories to check what it can actually recall">✓ Run recall test</button>
-          <button class="toolbtn" id="polishBtn" title="Drafts cleanups — tidies awkward memories, drops junk, and combines fragments of the same fact into one — you review and approve each change before anything happens">✨ Smooth memories</button>
-        </div>
         <div id="memTools" class="toolresult" hidden></div>
         <div class="memsearch">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
@@ -1840,6 +1870,8 @@ function showMemorySub(sub){
   document.querySelectorAll(".subseg").forEach(b=>{
     const on=b.dataset.sub===sub; b.classList.toggle("active", on); b.setAttribute("aria-selected", on);
   });
+  const mw=$("#memMenuWrap"); if(mw) mw.hidden=(sub!=="memories");  // tools apply to memories only
+  closeMemMenu();
   if(sub==="timeline") loadTimeline();
   else if(sub==="chats") loadChats();
   else if(sub==="memories"){ const mt=$("#memTools"); if(mt){ mt.hidden=true; mt.innerHTML=""; } loadMemories(); }
@@ -3256,6 +3288,24 @@ document.querySelectorAll("[data-view]").forEach(b=>b.addEventListener("click",(
 // back returns to the active call if one is running, otherwise the landing page
 document.querySelectorAll("[data-back]").forEach(b=>b.addEventListener("click",()=>showView(started?"call":"landing")));
 document.querySelectorAll(".subseg").forEach(b=>b.addEventListener("click",()=>showMemorySub(b.dataset.sub)));
+
+// header ⋯ menu (Run recall test · Smooth memories)
+function closeMemMenu(){
+  const pop=$("#memMenu"), btn=$("#memMenuBtn");
+  if(pop) pop.hidden=true;
+  if(btn) btn.setAttribute("aria-expanded","false");
+}
+(function(){
+  const btn=$("#memMenuBtn"), pop=$("#memMenu"); if(!btn||!pop) return;
+  btn.addEventListener("click",(e)=>{
+    e.stopPropagation();
+    const open=pop.hidden;
+    pop.hidden=!open; btn.setAttribute("aria-expanded", String(open));
+  });
+  pop.addEventListener("click",()=>closeMemMenu());              // any action closes it
+  document.addEventListener("click",(e)=>{ if(!e.target.closest("#memMenuWrap")) closeMemMenu(); });
+  document.addEventListener("keydown",(e)=>{ if(e.key==="Escape") closeMemMenu(); });
+})();
 $("#ruleForm").addEventListener("submit",(e)=>{ e.preventDefault(); addRule(); });
 /* clipboard with a selection+execCommand fallback (some WKWebView paths reject
    the async clipboard API) */
