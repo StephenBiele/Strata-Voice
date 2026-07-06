@@ -1419,7 +1419,7 @@
       <div class="teststatus" id="upd_status"></div>
       <div id="upd_list"></div>
 
-      <button class="savebtn" id="settingsSave">Save settings</button>
+      <button class="savebtn headsave" id="settingsSave" style="margin-top:1.2rem">Save</button>
       <div class="teststatus" id="set_savenote"></div>
     </div>
   </section>
@@ -2310,7 +2310,7 @@ async function saveSettings(){
     ? "Downloading & loading Chatterbox… first time only (~1 GB). This can take a minute — keep this tab open."
     : "Switching to Kokoro…"; }
   // two Save buttons share one state: the pinned header one and the bottom one
-  const btns=[["#settingsSave","Save settings"],["#settingsSaveTop","Save"]]
+  const btns=[["#settingsSave","Save"],["#settingsSaveTop","Save"]]
     .map(([sel,def])=>({el:$(sel),def})).filter(b=>b.el);
   const paintBtns=(dis,txt)=>btns.forEach(b=>{ b.el.disabled=dis; b.el.textContent=txt||b.def; });
   paintBtns(true,"Saving…");

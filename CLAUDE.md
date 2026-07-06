@@ -37,6 +37,11 @@ The short version:
 
 - Verify changes against a real running instance (throwaway server on a spare
   port with `VOICE_DB` pointed at scratch space), not just by reading code.
+- **Any visible UI change must be checked in BOTH light and dark mode** before
+  it's considered done — the theme uses OS `prefers-color-scheme` plus a manual
+  override (`applyTheme('light')` / `applyTheme('dark')`). A change that looks
+  right in one mode can have wrong contrast, invisible borders, or washed-out
+  surfaces in the other.
 - Frontend and server are cache-sensitive: the page is served no-store; a
   server restart is needed for `server.py`/`voicechat.py` changes, refresh for
   `index.html`.
