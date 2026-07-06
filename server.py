@@ -1201,6 +1201,13 @@ def _profile_context() -> str:
             "into replies where it isn't needed):\n" + "\n".join(lines)) if lines else ""
 
 
+def _persona(s: dict) -> str:
+    """Active persona with {{ASSISTANT_NAME}} resolved to the configured name, so the
+    default persona (or any persona using the token) stays correct after a rename."""
+    p = s.get("persona") or vc.PERSONA_PROMPT
+    return p.replace("{{ASSISTANT_NAME}}", s.get("assistant_name") or ASSISTANT_NAME)
+
+
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n{2,}")
 
 
@@ -1478,7 +1485,7 @@ def _stream_turn(text: str, *, speak: bool, emit_tokens: bool, private: bool = F
     # recaps, and an unbounded history makes every turn's prefill slower.
     messages = vc.build_messages(
         _history[-40:], mem_text,
-        documents=_doc_context(text), profile=_profile_context(), persona=s["persona"],
+        documents=_doc_context(text), profile=_profile_context(), persona=_persona(s),
         recent=recent, forgotten=_forgotten, emotion=_emotion_active() and speak,
         web=web_ctx, web_fresh=web_fresh,
         rules=[r["text"] for r in vc.list_rules(_strata)],   # L4: always-on standing rules
@@ -1631,7 +1638,7 @@ def _run_eval() -> dict:
     def ask(question: str) -> str:
         msgs = vc.build_messages(
             [{"role": "user", "content": question}], mems,
-            documents=_doc_context(question), profile=_profile_context(), persona=s["persona"])
+            documents=_doc_context(question), profile=_profile_context(), persona=_persona(s))
         return vc.llm_complete(msgs, cfg)
 
     def hit(answer: str, kw: str) -> bool:
@@ -1747,6 +1754,7 @@ class Handler(BaseHTTPRequestHandler):
             out = {k: s[k] for k in SETTINGS_FIELDS}
             out["has_api_key"] = bool(_get_api_key())
             out["persona_default"] = vc.PERSONA_PROMPT
+            out["persona_presets"] = vc.PERSONA_PRESETS
             return self._json(200, out)
         if u.path == "/voices":
             return self._json(200, {"voices": _voice_list()})

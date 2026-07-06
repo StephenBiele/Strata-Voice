@@ -853,6 +853,14 @@
   .field input::placeholder{ color:var(--ink-faint); }
   .field input:focus{ outline:none; border-color:var(--sage-deep); box-shadow:0 0 0 3px oklch(0.66 0.10 133 / .16); }
   .field .hint{ font-size:.76rem; color:var(--ink-faint); margin-top:.35rem; }
+  /* persona preset picker */
+  .presetrow{ display:flex; flex-wrap:wrap; gap:.4rem; margin:0 0 .5rem; }
+  .presetchip{ appearance:none; cursor:pointer; font:inherit; font-size:.8rem; font-weight:600;
+    color:var(--ink-soft); background:var(--surface-soft); border:1px solid var(--line);
+    padding:.35rem .8rem; border-radius:999px; transition:background .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease); }
+  .presetchip:hover{ border-color:var(--sage-deep); color:var(--ink); }
+  .presetchip.active{ background:oklch(0.88 0.06 142); color:oklch(0.28 0.05 142); border-color:transparent; }
+  .presetdesc{ font-size:.76rem; color:var(--ink-faint); margin:0 0 .5rem; min-height:1em; line-height:1.4; }
   .savebtn{
     appearance:none; border:none; cursor:pointer; font-family:inherit; font-weight:600; font-size:1rem;
     color:var(--paper); padding:.85em 2em; border-radius:999px; margin-top:.4rem;
@@ -1244,8 +1252,10 @@
       </div>
       <div class="field adv">
         <label>System prompt<button class="linkbtn" id="set_resetPrompt">reset to default</button></label>
+        <div class="presetrow" id="personaPresets"></div>
+        <div class="presetdesc" id="personaPresetDesc"></div>
         <textarea id="set_persona" rows="6"></textarea>
-        <div class="hint">Memory instructions are always added automatically, so memory keeps working no matter what you write here.</div>
+        <div class="hint" id="personaHint"></div>
       </div>
       <h3 class="subhead">Voice</h3>
       <div class="field"><label>Voice engine</label>
@@ -2042,6 +2052,7 @@ async function loadSettings(){
   _settingsCache=s;
   $("#set_name").value=s.assistant_name||"";
   $("#set_persona").value=s.persona||"";
+  renderPersonaPresets();
   setSwitch($("#set_thinking"), !!s.thinking);
   setSwitch($("#set_websearch"), !!s.web_search);
   setSwitch($("#set_proactive"), s.proactive!==false);
@@ -3488,9 +3499,45 @@ $("#set_cbvoice_del").addEventListener("click", async (e)=>{
   await loadCbVoices("builtin");
   $("#set_cbvoice_status").textContent="";
 });
+// persona presets: one-click starting points (Concise default · Sage warm character)
+function renderPersonaPresets(){
+  const row=$("#personaPresets"), desc=$("#personaPresetDesc"), hint=$("#personaHint");
+  if(!row) return;
+  // built in JS so the server's {{ASSISTANT_NAME}} templating never rewrites the tip
+  const tok="{{"+"ASSISTANT_NAME"+"}}";
+  if(hint) hint.textContent="Pick a preset to start from, or write your own. Type "+tok+
+    " and it becomes your assistant's name. Memory instructions are always added automatically, "+
+    "so memory keeps working no matter what you write here.";
+  const presets=_settingsCache.persona_presets||[];
+  row.innerHTML="";
+  const cur=($("#set_persona").value||"").trim();
+  let matched=false;
+  presets.forEach(p=>{
+    const b=document.createElement("button");
+    b.type="button"; b.className="presetchip"; b.textContent=p.name;
+    if((p.text||"").trim()===cur){ b.classList.add("active"); if(desc) desc.textContent=p.description||""; matched=true; }
+    b.addEventListener("click",()=>{
+      $("#set_persona").value=p.text||"";
+      row.querySelectorAll(".presetchip").forEach(x=>x.classList.remove("active"));
+      b.classList.add("active");
+      if(desc) desc.textContent=p.description||"";
+    });
+    row.appendChild(b);
+  });
+  if(!matched && desc) desc.textContent="";   // custom / edited persona → no preset highlighted
+}
+$("#set_persona").addEventListener("input",()=>{   // manual edit deselects the preset
+  const cur=($("#set_persona").value||"").trim();
+  const presets=_settingsCache.persona_presets||[];
+  $("#personaPresets").querySelectorAll(".presetchip").forEach((b,i)=>{
+    b.classList.toggle("active",(presets[i]&&(presets[i].text||"").trim()===cur));
+  });
+  const hit=presets.find(p=>(p.text||"").trim()===cur);
+  $("#personaPresetDesc").textContent=hit?hit.description:"";
+});
 $("#set_resetPrompt").addEventListener("click",(e)=>{
   e.preventDefault();
-  if(_settingsCache.persona_default!=null) $("#set_persona").value=_settingsCache.persona_default;
+  if(_settingsCache.persona_default!=null){ $("#set_persona").value=_settingsCache.persona_default; renderPersonaPresets(); }
 });
 $("#set_speed").addEventListener("input",(e)=>{
   $("#set_speedval").textContent=Number(e.target.value).toFixed(2).replace(/0$/,"")+"×";
