@@ -907,11 +907,60 @@ def recall_memories(strata, query: str, top_k: int = RECALL_TOP_K) -> list[str]:
         return [m["text"] for m in list_memories(strata)]
 
 
+# Time-aware recall: embeddings ignore time, so "what did I do yesterday?" can't
+# be answered by topical similarity. When a query names a relative time window,
+# boost memories from that window to the front (a reorder, never a hard filter —
+# the two-pass lesson). Env-gated for A/B against the benchmark.
+TEMPORAL = os.environ.get("VOICE_TEMPORAL", "1") != "0"
+
+
+def _reltime(ts_ms: int, now_ms: int) -> str:
+    """A human relative-time tag for a memory's timestamp — what the model reads
+    to know which memory the asked timeframe means."""
+    d = (now_ms - ts_ms) / 86_400_000
+    if d < 1:   return "today"
+    if d < 2:   return "yesterday"
+    if d < 8:   return "in the past week"
+    if d < 15:  return f"about {int(round(d))} days ago"
+    if d < 45:  return "a few weeks ago"
+    if d < 400: return f"about {max(1, int(round(d / 30)))} month{'s' if d >= 45 else ''} ago"
+    return "a while ago"
+
+
+def _temporal_window(query: str):
+    """Parse a relative time expression into a (start_ms, end_ms) window, or None.
+    Rolling windows anchored to now — fuzzy on purpose, since they only reorder
+    recall, never drop anything."""
+    q = (query or "").lower()
+    now_ms = int(datetime.now().timestamp() * 1000)
+    D = 86_400_000
+
+    def w(newer_days, older_days):
+        return (now_ms - older_days * D, now_ms - newer_days * D)
+
+    if "yesterday" in q:
+        return w(1, 2)
+    if "this morning" in q or "today" in q or "tonight" in q:
+        return w(0, 1)
+    if "last week" in q:
+        return w(7, 14)
+    if "last month" in q:
+        return w(31, 62)
+    if any(p in q for p in ("this week", "this weekend", "past week", "past few days")):
+        return w(0, 7)
+    if "this month" in q:
+        return w(0, 31)
+    if any(p in q for p in ("recently", "lately", "these days", "the other day")):
+        return w(0, 14)
+    return None
+
+
 def select_memories(strata, query: str, *, semantic: bool = True,
                     threshold: int = RECALL_THRESHOLD, mems=None) -> list[str]:
     """Pick the memory texts to inject this turn. Small store -> inject everything
-    (perfect, ~free). Large store -> semantic recall of the most relevant few.
-    Pass ``mems`` (a fresh list_memories snapshot) to avoid a duplicate query.
+    (perfect, ~free). Large store -> semantic recall of the most relevant few. When
+    the query names a time window, memories from that window are boosted to the
+    front. Pass ``mems`` (a fresh list_memories snapshot) to avoid a duplicate query.
 
     Note: we deliberately do NOT scope the injected set to a single event
     (an earlier two-pass experiment did, and the benchmark showed it dropped
@@ -920,9 +969,32 @@ def select_memories(strata, query: str, *, semantic: bool = True,
     measured win — collisions to 0 with recall held at 100%."""
     if mems is None:
         mems = list_memories(strata)
-    if not semantic or len(mems) <= threshold:
-        return [m["text"] for m in mems]
-    return recall_memories(strata, query)
+    small = not semantic or len(mems) <= threshold
+    if small:
+        base = list(mems)
+    else:
+        order = recall_memories(strata, query)          # semantic, ordered by relevance
+        tmap = {m["text"]: m for m in mems}
+        base = [tmap[t] for t in order if t in tmap]
+
+    win = _temporal_window(query) if TEMPORAL else None
+    if win:
+        lo, hi = win
+        now_ms = int(datetime.now().timestamp() * 1000)
+        in_win = sorted((m for m in mems if lo <= (m.get("t") or 0) <= hi),
+                        key=lambda m: m.get("t") or 0, reverse=True)   # most recent first
+        seen, ordered = set(), []
+        # On a time-scoped query, tag EVERY injected memory with its relative time:
+        # the in-window ones go first, and tagging the others too lets the model
+        # tell that a similar memory happened at a DIFFERENT time and exclude it
+        # (the facts don't carry dates themselves).
+        for m in in_win + base:
+            if m["text"] not in seen:
+                seen.add(m["text"])
+                ordered.append(f"{m['text']} ({_reltime(m.get('t') or now_ms, now_ms)})")
+        return ordered[:max(RECALL_TOP_K, len(in_win))]
+
+    return [m["text"] for m in base] if small else [m["text"] for m in base][:RECALL_TOP_K]
 
 
 # ---- memory capture ------------------------------------------------------------

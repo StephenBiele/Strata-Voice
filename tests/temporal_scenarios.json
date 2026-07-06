@@ -1,0 +1,58 @@
+{
+  "_note": "Temporal recall benchmark. Plants topically-similar events at KNOWN times (days_ago), then asks time-scoped queries where ONLY the timestamp disambiguates. Baseline (semantic-only) can't tell them apart because embeddings ignore time; the time-aware boost should surface the right-window memory first. Scored deterministically: does the target-window fact rank before the wrong-window one, and does the reply stay on the right one.",
+  "filler": [
+    "Lives in Arvada, Colorado",
+    "Works as a software engineer",
+    "Has a dog named Molly",
+    "Drinks tea in the morning",
+    "Supports the Denver Nuggets",
+    "Drives a blue Subaru",
+    "Is allergic to shellfish",
+    "Reads science fiction",
+    "Has a younger brother named Chris",
+    "Prefers window seats",
+    "Plays the guitar",
+    "Enjoys bouldering"
+  ],
+  "scenarios": [
+    {
+      "id": "dentist-yesterday",
+      "kind": "identical topic, only time differs",
+      "events": [
+        {"days_ago": 1,  "utterance": "I went to the dentist yesterday for a cleaning",
+         "facts": ["Went to the dentist for a cleaning"]},
+        {"days_ago": 45, "utterance": "I had a dentist appointment for a filling last month",
+         "facts": ["Went to the dentist for a filling"]}
+      ],
+      "query": "What did I go to the dentist for yesterday?",
+      "target_keys": ["cleaning"],
+      "distractor_keys": ["filling"]
+    },
+    {
+      "id": "lately-vs-old",
+      "kind": "recency window",
+      "events": [
+        {"days_ago": 4,   "utterance": "I just started training for a half marathon",
+         "facts": ["Started training for a half marathon"]},
+        {"days_ago": 240, "utterance": "I went backpacking through Europe last year",
+         "facts": ["Went backpacking through Europe"]}
+      ],
+      "query": "What have I been up to lately?",
+      "target_keys": ["marathon"],
+      "distractor_keys": ["europe"]
+    },
+    {
+      "id": "this-weekend",
+      "kind": "recent window vs old",
+      "events": [
+        {"days_ago": 2,  "utterance": "I went to a jazz concert downtown this weekend",
+         "facts": ["Went to a jazz concert downtown"]},
+        {"days_ago": 95, "utterance": "I took a cooking class a few months back",
+         "facts": ["Took a cooking class"]}
+      ],
+      "query": "What did I do this weekend?",
+      "target_keys": ["jazz"],
+      "distractor_keys": ["cooking"]
+    }
+  ]
+}
