@@ -125,6 +125,12 @@ short version; below it, the complete inventory.
   the ground truth is one click away.
 - **Semantic recall** — small stores inject everything (perfect recall); past a
   threshold, vector + keyword search selects what's relevant to this turn.
+- **No cross-wiring similar events** — when you ask about one specific thing
+  ("the Thursday interview", "that appointment yesterday"), it answers from the
+  single most relevant memory instead of blending in a similar one — while still
+  listing them all when you ask for "all" or "both". Measured by a disambiguation
+  benchmark (`tests/memory_benchmark.py`) that plants close-in-time events and
+  scores recall vs. collisions.
 - **Conversation recaps** — each session is summarized into an episodic layer,
   surfaced only when relevant, so "what were we talking about last time?" works.
 - **Standing rules (L4 guardrails)** — plain-language rules the assistant always
