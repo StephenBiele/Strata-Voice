@@ -62,11 +62,12 @@ MIC_SR = 16000   # Parakeet wants 16 kHz mono
 TTS_SR = 24000   # Kokoro output rate
 
 # The editable persona (exposed in Settings). Keep it about voice + tone.
-PERSONA_PROMPT = """You are a warm, concise voice assistant. Keep replies short \
-and natural: usually one or two sentences, since they are spoken aloud. Do not \
-use markdown, lists, or emoji. Write the way people actually speak: short, plain \
-sentences with simple punctuation. Avoid dashes, semicolons, and long chains of \
-commas — they make the spoken voice sound choppy.
+PERSONA_PROMPT = """You are a warm, concise voice assistant. Replies are spoken \
+aloud, so keep them brief and natural: usually two to four short sentences, and \
+often one is plenty. Say the useful thing and stop — don't pad, don't over-explain, \
+and don't stack questions. Do not use markdown, lists, or emoji. Write the way \
+people actually speak: short, plain sentences with simple punctuation. Avoid \
+dashes, semicolons, and long chains of commas — they make the spoken voice sound choppy.
 
 You know some things about the user — their profile and remembered facts are \
 provided below. When the user asks about something you know (their name, where \
@@ -102,6 +103,24 @@ don't bring up Tuesday's; if they ask about one trip, don't mention the other. V
 other events only when the user clearly asks for more than one ("all my…", "both…", \
 "what else…"). If two memories fit and you truly can't tell which they mean, ask which \
 one rather than blending them."""
+
+
+GROUNDING_GUARD = """WHAT YOU KNOW vs WHAT'S HAPPENING NOW: the memories and profile \
+above are things the user told you in EARLIER conversations, not a feed of what is \
+happening right now. So when the user just GREETS you or opens with something vague \
+("hey", "let's recap the day", "how's it going"), don't paint a scene, don't list what \
+you remember, and don't guess what they've been up to — greet them briefly and let THEM \
+tell you. Don't open by announcing the time, the date, or the setting. \
+For example, if they say "just wanted to recap the day", the RIGHT reply is a short, open \
+invitation — "Sure, how was it?" or "I'm all ears, what happened?" The WRONG reply invents \
+a scene from old memories — "sounds like a quiet day in Arvada after bouldering, still \
+waiting on that Fourth of July visit?" You were not there and those memories are from \
+before, so guessing at the present is the exact mistake to avoid.
+BUT when the user actually ASKS about something — what they did, a past event, a plan, a \
+preference, or what you know about them — answer it directly and confidently from memory; \
+that is exactly what the memories are for. This rule is ONLY about not volunteering an \
+unprompted scene. It never means refusing, hedging, or saying you have no records when \
+the answer is right there above."""
 
 
 RECALL_GUARD = """USING WHAT YOU KNOW: The user profile and current memories above \
@@ -491,11 +510,11 @@ def build_messages(history, memories, documents=None, profile=None,
         system += "\n\n" + CURIOSITY_PROMPT
     if proactive:
         system += ("\n\nGENTLE HEADS-UP (only right now, at the very start of this conversation): "
-                   "the user has " + proactive + " coming up. If they open with a greeting or "
-                   "anything open-ended, that's the ideal moment — warmly bring it up and offer light "
-                   "help. If they open with a specific unrelated request, answer that first, then add "
-                   "a brief one-line heads-up. Mention it at most once, and never raise it again later "
-                   "in the conversation.")
+                   "the user has " + proactive + " coming up. Mention it in ONE short, natural line — "
+                   "just the heads-up, nothing more. Do NOT narrate a scene, guess details, or pile on "
+                   "other memories around it. If they open with a specific unrelated request, answer "
+                   "that first, then optionally add the one-line heads-up. Mention it at most once, and "
+                   "never raise it again later in the conversation.")
     system += f"\n\nCURRENT MEMORIES:\n{mem_block}"
     if forgotten:
         joined = "\n".join(f"- {f}" for f in forgotten)
@@ -531,9 +550,17 @@ def build_messages(history, memories, documents=None, profile=None,
     system += "\n\n" + MEMORY_DIRECTIVES
     system += "\n\n" + RECALL_GUARD
     system += "\n\n" + FOCUS_GUARD
+    system += "\n\n" + GROUNDING_GUARD
     if emotion:
         system += "\n\n" + EMOTION_PROMPT
     return [{"role": "system", "content": system}, *history]
+
+
+# Voice replies are spoken aloud, so an uncapped reply just rambles. When the user
+# hasn't set an explicit cap, fall back to this instead of the model's own (often
+# thousands of tokens). ~200 tokens is roughly 150 words — plenty for two to four
+# spoken sentences, and it only ever truncates a genuine runaway.
+DEFAULT_MAX_TOKENS = int(os.environ.get("VOICE_MAX_TOKENS", "200"))
 
 
 def _openai_payload(cfg: dict, model: str, messages: list[dict], stream: bool) -> dict:
@@ -541,9 +568,7 @@ def _openai_payload(cfg: dict, model: str, messages: list[dict], stream: bool) -
     p = {"model": model, "messages": messages, "stream": stream,
          "temperature": float(cfg.get("temperature", 0.6)),
          "top_p": float(cfg.get("top_p", 1.0))}
-    mt = int(cfg.get("max_tokens", 0) or 0)
-    if mt > 0:
-        p["max_tokens"] = mt            # context window is model-fixed here
+    p["max_tokens"] = int(cfg.get("max_tokens", 0) or 0) or DEFAULT_MAX_TOKENS
     return p
 
 
@@ -554,9 +579,7 @@ def _ollama_opts(cfg: dict) -> dict:
     nc = int(cfg.get("num_ctx", 0) or 0)
     if nc > 0:
         o["num_ctx"] = nc               # context window (Ollama-specific)
-    mt = int(cfg.get("max_tokens", 0) or 0)
-    if mt > 0:
-        o["num_predict"] = mt
+    o["num_predict"] = int(cfg.get("max_tokens", 0) or 0) or DEFAULT_MAX_TOKENS
     return o
 
 
@@ -952,13 +975,15 @@ _COMMIT_RE = re.compile(
     r"doctor|presentation|graduation|birthday|anniversary|move|moving|closing|hearing)\b", re.I)
 
 _UPCOMING_PROMPT = """Today is {today}. Below are things the user mentioned, each with WHEN they said it. \
-Find the SINGLE most relevant SPECIFIC upcoming event in the near future (roughly the next 10 days). \
+Find the SINGLE most relevant SPECIFIC, DATED commitment that falls TODAY or within the next 3 days. \
 Resolve relative dates from when it was said: "interview Thursday" said last Monday, with today being \
 Wednesday, means this Thursday (tomorrow).
-If there is a genuine upcoming one, reply with a SHORT description resolved to a concrete day — e.g. \
-"a job interview with Globex this Thursday" or "a dentist appointment tomorrow". Nothing else.
-If nothing is clearly upcoming — everything is a stable fact, already passed, or too vague — reply with \
-exactly: NONE
+Be strict. Only answer if it is a concrete commitment (an appointment, interview, flight, deadline, \
+event) with a clear day that is today or in the next 3 days. If so, reply with a SHORT description \
+resolved to a concrete day — e.g. "a job interview with Globex this Thursday" or "a dentist appointment \
+tomorrow". Nothing else.
+Otherwise — anything more than 3 days out, already passed, a stable fact, a preference, a place, a \
+person, a hobby, or at all vague — reply with exactly: NONE. When in doubt, reply NONE.
 
 Mentioned:
 {items}
@@ -1121,8 +1146,13 @@ def _first_json_array(raw: str) -> str | None:
 def _mem_cfg(cfg: dict | None) -> dict:
     """Config for memory-writing LLM calls: temperature 0 and no thinking.
     Distillation should be deterministic — the chat temperature is tuned for
-    personality, which is exactly what causes detail drift in stored facts."""
-    return {**(cfg or {}), "temperature": 0.0, "thinking": False}
+    personality, which is exactly what causes detail drift in stored facts.
+
+    These calls emit JSON (fact lists, polish rewrites), not spoken replies, so
+    they must NOT inherit the short spoken-reply cap — give them ample room."""
+    base = cfg or {}
+    return {**base, "temperature": 0.0, "thinking": False,
+            "max_tokens": max(int(base.get("max_tokens", 0) or 0), 2048)}
 
 
 def capture_memory(strata, user_text: str, event_id: int | None = None) -> list[str]:

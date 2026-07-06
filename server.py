@@ -91,7 +91,7 @@ DEFAULT_SETTINGS = {
     # LLM generation controls
     "llm_temperature": 0.6,              # 0 = deterministic, higher = more varied
     "llm_top_p": 1.0,                    # nucleus sampling (1 = off)
-    "llm_max_tokens": 0,                 # cap on reply length (0 = model default)
+    "llm_max_tokens": 0,                 # cap on reply length (0 = voice-friendly default, ~200)
     "llm_num_ctx": 0,                    # context window, Ollama only (0 = model default)
     # Speech recognition (what turns your voice into text)
     "asr_model": vc.ASR_MODEL,           # HF model id
