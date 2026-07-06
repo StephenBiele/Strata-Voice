@@ -235,6 +235,10 @@ short version; below it, the complete inventory.
   working choice.
 - **Plain-language copy** — every control says what it does in words a person
   uses.
+- **Dark mode** — follows your Mac's light/dark setting automatically
+  (`prefers-color-scheme`), or force Auto / Light / Dark in Settings → Appearance.
+  A warm, sage-tinted dark — the same calm companion after sundown, never a
+  cyan-on-black terminal.
 - **Detail care** — slider fills that actually meet the knob, accessible touch
   targets, reduced-motion support, always-fresh pages after updates.
 - **A/B preview culture** — voices and cadence are auditioned, not guessed at.
