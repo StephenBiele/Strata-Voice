@@ -28,7 +28,7 @@ import re
 import sys
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -151,6 +151,10 @@ Write memories the way a person remembers: the GIST, in clean third person \
 ("Has a job interview on Tuesday") — never the user's verbatim wording, filler \
 words, or transcription noise, but keep anchor details (names, dates, numbers, \
 places) exactly as the user said them. One complete thought per fact.
+For an event, name the day but NOT its tense — write "Has a dentist appointment on \
+Thursday", not "upcoming appointment" or "will go" or "went". The event's day is \
+fixed; whether it is still ahead or already past is worked out later from the date, \
+so tense words like "upcoming" go stale and must be left out.
 Only emit a directive for genuinely durable facts or explicit forget requests. \
 Never emit one for small talk, questions, or transient events."""
 
@@ -182,7 +186,10 @@ BUT when the user actually ASKS about something — what they did, a past event,
 preference, or what you know about them — answer it directly and confidently from memory; \
 that is exactly what the memories are for. This rule is ONLY about not volunteering an \
 unprompted scene. It never means refusing, hedging, or saying you have no records when \
-the answer is right there above."""
+the answer is right there above.
+Some memories are tagged in parentheses with their timing — "coming up in 3 days", \
+"was 2 days ago, now in the past". Honour it: speak of a passed event in the past tense \
+and never call it upcoming, and only mention the timing itself when it's relevant."""
 
 
 RECALL_GUARD = """USING WHAT YOU KNOW: The user profile and current memories above \
@@ -1131,6 +1138,163 @@ def _temporal_window(query: str):
     return None
 
 
+# ---- event recency ------------------------------------------------------------
+# A remembered event ("interview next Thursday", "outing for the Fourth of July")
+# is FUTURE when you mention it and PAST once its day arrives. The store only knows
+# WHEN you said it, not when the event is — so without this the model keeps calling
+# a passed event "upcoming". We resolve the event's actual date from the fact text
+# (anchored on when it was said, since "Thursday"/"next week" are relative to that),
+# then tag it upcoming/past at recall time and push already-past events down. Fully
+# deterministic (no LLM) so recall stays fast and the behaviour is benchmarkable.
+_MONTHS = {m: i for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june", "july", "august",
+     "september", "october", "november", "december"], 1)}
+_MON_ABBR = {m[:3]: i for m, i in _MONTHS.items()}
+_WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+             "friday": 4, "saturday": 5, "sunday": 6}
+# fixed-date holidays (substring -> month, day). Longer keys first when matching.
+_HOLIDAYS = {
+    "new year's eve": (12, 31), "new years eve": (12, 31),
+    "christmas eve": (12, 24), "christmas": (12, 25),
+    "fourth of july": (7, 4), "4th of july": (7, 4), "july 4th": (7, 4),
+    "independence day": (7, 4), "juneteenth": (6, 19), "halloween": (10, 31),
+    "valentine": (2, 14), "new year": (1, 1),
+}
+_DAY_MS = 86_400_000
+
+
+def _event_date(text: str, mention_ms: int):
+    """Best-effort absolute date (ms) that a fact refers to, or None if it names no
+    date. Relative words are anchored on ``mention_ms`` (when it was said); an
+    absolute month/day picks the occurrence on or after that anchor, since people
+    mention events shortly before they happen."""
+    t = " " + (text or "").lower() + " "
+    anchor = datetime.fromtimestamp(mention_ms / 1000).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def mk(y, mo, d):
+        try:
+            return datetime(y, mo, d)
+        except ValueError:
+            return None
+
+    def on_or_after(mo, d):
+        # nearest occurrence of month/day that isn't well before the anchor
+        cand = mk(anchor.year, mo, d)
+        if cand is None:
+            return None
+        if cand < anchor - timedelta(days=1):
+            return mk(anchor.year + 1, mo, d) or cand
+        return cand
+
+    dt = None
+    # ISO date  (2026-07-04)
+    m = re.search(r"\b(20\d\d)-(\d{1,2})-(\d{1,2})\b", t)
+    if m:
+        dt = mk(int(m[1]), int(m[2]), int(m[3]))
+    # month name + day  ("July 4", "4th of July", "December 3, 2026")
+    if dt is None:
+        m = re.search(r"\b([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(20\d\d))?\b", t)
+        if m and m[1] in _MONTHS or (m and m[1] in _MON_ABBR):
+            mo = _MONTHS.get(m[1]) or _MON_ABBR.get(m[1])
+            dt = mk(int(m[3]), mo, int(m[2])) if m[3] else on_or_after(mo, int(m[2]))
+        if dt is None:
+            m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+of\s+([a-z]+)\b", t)
+            if m and (m[2] in _MONTHS or m[2] in _MON_ABBR):
+                mo = _MONTHS.get(m[2]) or _MON_ABBR.get(m[2])
+                dt = on_or_after(mo, int(m[1]))
+    # holidays
+    if dt is None:
+        for name, (mo, d) in _HOLIDAYS.items():
+            if name in t:
+                dt = on_or_after(mo, d)
+                break
+    # relative phrases
+    if dt is None:
+        if "day after tomorrow" in t:
+            dt = anchor + timedelta(days=2)
+        elif "tomorrow" in t:
+            dt = anchor + timedelta(days=1)
+        elif re.search(r"\bin (\d{1,2}) days?\b", t):
+            dt = anchor + timedelta(days=int(re.search(r"\bin (\d{1,2}) days?\b", t)[1]))
+        elif re.search(r"\bin (\d{1,2}) weeks?\b", t):
+            dt = anchor + timedelta(weeks=int(re.search(r"\bin (\d{1,2}) weeks?\b", t)[1]))
+        elif "next weekend" in t:
+            dt = anchor + timedelta(days=(5 - anchor.weekday()) % 7 + 7)
+        elif "this weekend" in t or "the weekend" in t:
+            dt = anchor + timedelta(days=(5 - anchor.weekday()) % 7)
+        elif "next week" in t:
+            dt = anchor + timedelta(days=7)
+        elif "next month" in t:
+            dt = anchor + timedelta(days=30)
+    # weekday name  ("Thursday", "next Friday") -> next such day at/after anchor
+    if dt is None:
+        for wd, idx in _WEEKDAYS.items():
+            if wd in t:
+                # nearest upcoming occurrence at/after the anchor. "next Thursday" is
+                # genuinely ambiguous in speech; treat it as the imminent one.
+                dt = anchor + timedelta(days=(idx - anchor.weekday()) % 7)
+                break
+    return int(dt.timestamp() * 1000) if dt else None
+
+
+def _recency_tag(event_ms: int, now_ms: int) -> str:
+    """Human tag telling the model whether a dated event is upcoming or already past.
+    Counts whole CALENDAR days (events are date-level, so a noon 'now' vs a midnight
+    event date must not round a next-day event down to zero)."""
+    ev = datetime.fromtimestamp(event_ms / 1000).date()
+    d = (ev - datetime.fromtimestamp(now_ms / 1000).date()).days
+    if d == 0:
+        return "happening today"
+    if d > 0:
+        n = d
+        if n == 1:
+            return "coming up tomorrow"
+        if n <= 10:
+            return f"coming up in {n} days"
+        if n <= 45:
+            return "coming up in a few weeks"
+        if n <= 75:
+            return "coming up in a couple of months"
+        return "coming up later on"
+    n = -d
+    if n == 1:
+        return "was yesterday, now in the past"
+    if n <= 10:
+        return f"was {n} days ago, now in the past"
+    if n <= 45:
+        return "was a few weeks ago, now in the past"
+    if n <= 400:
+        months = max(1, round(n / 30))
+        return f"was about {months} month{'s' if months > 1 else ''} ago, now in the past"
+    return "was a while ago, now in the past"
+
+
+def _with_recency(m: dict, now_ms: int) -> str:
+    """Tag a memory: an event date if the fact names one, else the mention time."""
+    ev = _event_date(m["text"], m.get("t") or now_ms) if TEMPORAL else None
+    if ev is not None:
+        return f"{m['text']} ({_recency_tag(ev, now_ms)})"
+    return f"{m['text']} ({_reltime(m.get('t') or now_ms, now_ms)})"
+
+
+def _order_by_recency(mem_dicts: list[dict], now_ms: int) -> list[str]:
+    """Tag dated events upcoming/past and push already-passed ones to the end — a
+    passed event is less relevant than a live one. Undated memories keep their
+    order and get no tag (so plain-fact recall is untouched)."""
+    if not TEMPORAL:
+        return [m["text"] for m in mem_dicts]
+    fresh, past = [], []
+    for m in mem_dicts:
+        ev = _event_date(m["text"], m.get("t") or now_ms)
+        if ev is None:
+            fresh.append(m["text"])
+        elif ev < now_ms - _DAY_MS // 2:          # >12h in the past
+            past.append(f"{m['text']} ({_recency_tag(ev, now_ms)})")
+        else:
+            fresh.append(f"{m['text']} ({_recency_tag(ev, now_ms)})")
+    return fresh + past
+
+
 def select_memories(strata, query: str, *, semantic: bool = True,
                     threshold: int = RECALL_THRESHOLD, mems=None) -> list[str]:
     """Pick the memory texts to inject this turn. Small store -> inject everything
@@ -1153,24 +1317,24 @@ def select_memories(strata, query: str, *, semantic: bool = True,
         tmap = {m["text"]: m for m in mems}
         base = [tmap[t] for t in order if t in tmap]
 
+    now_ms = int(datetime.now().timestamp() * 1000)
     win = _temporal_window(query) if TEMPORAL else None
     if win:
         lo, hi = win
-        now_ms = int(datetime.now().timestamp() * 1000)
         in_win = sorted((m for m in mems if lo <= (m.get("t") or 0) <= hi),
                         key=lambda m: m.get("t") or 0, reverse=True)   # most recent first
         seen, ordered = set(), []
-        # On a time-scoped query, tag EVERY injected memory with its relative time:
-        # the in-window ones go first, and tagging the others too lets the model
-        # tell that a similar memory happened at a DIFFERENT time and exclude it
-        # (the facts don't carry dates themselves).
+        # On a time-scoped query, tag EVERY injected memory with its time: a dated
+        # event gets its real upcoming/past status, everything else its mention time.
+        # This lets the model tell a similar memory happened at a DIFFERENT time.
         for m in in_win + base:
             if m["text"] not in seen:
                 seen.add(m["text"])
-                ordered.append(f"{m['text']} ({_reltime(m.get('t') or now_ms, now_ms)})")
+                ordered.append(_with_recency(m, now_ms))
         return ordered[:max(RECALL_TOP_K, len(in_win))]
 
-    return [m["text"] for m in base] if small else [m["text"] for m in base][:RECALL_TOP_K]
+    out = base if small else base[:RECALL_TOP_K]
+    return _order_by_recency(out, now_ms)
 
 
 # ---- memory capture ------------------------------------------------------------
@@ -1306,6 +1470,7 @@ be sure what was meant, skip it rather than guess.
 Copy anchor details — names, dates, days of the week, times, numbers, places, and titles — EXACTLY as the user said them; paraphrase only the wording around them, never the anchors.
 Facts are read aloud by a voice, so spell everything out ("Arvada, Colorado" — never "Arvada, Co.").
 Never begin a fact with "The user" — start with the verb or noun ("Has a dog named Molly", "Getting into bouldering").
+For an event, record the DAY but not its tense: write "Has a dentist appointment on Thursday", never "upcoming appointment", "will go", or "went" — whether it is still ahead or already past is worked out later from the date, so words like "upcoming" go stale and must be left out.
 A one-time outing or errand ("went to the park", "was at Cherry Creek today") is NOT durable — keep an activity \
 only when it shows an ongoing interest or habit ("Getting into bouldering").
 Return ONLY a JSON array of short factual strings written in the third person, e.g.
@@ -1390,6 +1555,7 @@ starts — never copy garbled wording; write each fact cleanly, and skip what yo
 Copy anchor details — names, dates, days of the week, times, numbers, places, and titles — EXACTLY as the user said them; paraphrase only the wording around them, never the anchors.
 Facts are read aloud by a voice, so spell everything out ("Arvada, Colorado" — never "Arvada, Co.").
 Never begin a fact with "The user" — start with the verb or noun ("Has a dog named Molly", "Getting into bouldering").
+For an event, record the DAY but not its tense: write "Has a dentist appointment on Thursday", never "upcoming appointment", "will go", or "went" — whether it is still ahead or already past is worked out later from the date, so words like "upcoming" go stale and must be left out.
 A one-time outing or errand ("went to the park", "was at Cherry Creek today") is NOT durable — keep an activity \
 only when it shows an ongoing interest or habit ("Getting into bouldering").
 ONLY capture facts the USER stated about themselves or explicitly confirmed. This is critical:
@@ -1507,7 +1673,10 @@ For each memory decide ONE of:
 - keep     — already a clean, durable, third-person fact. Most memories should be kept.
 - rewrite  — the fact is real but badly written: verbatim transcription garble, filler words, \
 starts with "The user", contains abbreviations that sound wrong when read aloud \
-("Arvada, Co." -> "Arvada, Colorado"), or is a fragment. Rewrite as ONE clean third-person fact. \
+("Arvada, Co." -> "Arvada, Colorado"), or is a fragment, or bakes tense into an event \
+("upcoming outing for the Fourth of July" -> "Has an outing on the Fourth of July"; drop \
+"upcoming"/"will"/"went" — the day is fixed, its past/future is worked out from the date). \
+Rewrite as ONE clean third-person fact. \
 Keep every anchor detail (names, dates, times, numbers, places) exactly. The rewritten text must \
 NEVER begin with "The user" — start with the verb or noun ("Explained…", "Has a…", "Lives in…").
 - delete   — not a durable fact at all: a question ("How to remove memories"), a test command \

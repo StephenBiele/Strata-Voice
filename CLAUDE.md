@@ -32,6 +32,9 @@ The short version:
     kept out, distinct facts not clobbered by dedup.
   - `tests/temporal_benchmark.py` — time-scoped queries ("yesterday", "lately"):
     right-window ranking + answer. A/B the fix with `VOICE_TEMPORAL=0/1`.
+  - `tests/event_recency_benchmark.py` — a remembered event's future→past
+    transition: the deterministic resolver (`_event_date`/`_recency_tag`,
+    run with `--no-llm`) plus an end-to-end past-tense check.
 
 ## Conventions
 
