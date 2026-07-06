@@ -30,7 +30,7 @@ import voicechat as vc  # noqa: E402
 
 TOP_K = 8
 LLM_CFG = {"backend": "ollama", "ollama_model": os.environ.get("BENCH_MODEL", "qwen3.5:4b"),
-           "temperature": 0.3}
+           "temperature": 0.0}   # deterministic — the answer metric must not vary run-to-run
 
 
 def _hit(keys, texts) -> int:
@@ -47,22 +47,29 @@ def run_scenario(sc, filler, embedder) -> dict:
         # runs (below it the app injects everything and there's nothing to test)
         for f in filler:
             st.write_memory(f)
-        # plant each event's facts, source-linked to the utterance L0 event
+        # plant each event's facts RAW (write_memory, not add_facts) so the
+        # dedup/supersede path can't merge two genuinely-distinct similar facts
+        # and corrupt the ground truth — then source-link each to its utterance.
         for ev in sc["events"]:
             eid = vc.record_event(st, ev["utterance"])
-            vc.add_facts(st, ev["facts"], eid)
+            for fact in ev["facts"]:
+                res = st.write_memory(fact)
+                fid = res.get("id") if isinstance(res, dict) else None
+                if fid and eid:
+                    st.link_source(fid, eid)
         vc.warm_index(st)
 
         q = sc["query"]
         tgt, dis = sc["target_keys"], sc["distractor_keys"]
 
-        # 1) retrieval level
-        recalled = vc.recall_memories(st, q, top_k=TOP_K)
-        r_recall = _hit(tgt, recalled) / len(tgt) if tgt else 1.0
-        r_leak = _hit(dis, recalled)            # distractor facts that slipped into context
+        # 1) context level — what actually reaches the prompt (this is what
+        #    two-pass changes: same select_memories the live turn uses)
+        mem_text = vc.select_memories(st, q, semantic=True)
+        r_recall = _hit(tgt, mem_text) / len(tgt) if tgt else 1.0
+        r_leak = _hit(dis, mem_text)            # distractor facts that slipped into context
+        recalled = mem_text
 
         # 2) answer level (the collision that actually reaches the user)
-        mem_text = vc.select_memories(st, q, semantic=True)
         msgs = vc.build_messages([{"role": "user", "content": q}], mem_text)
         try:
             reply = vc.llm_complete(msgs, LLM_CFG)

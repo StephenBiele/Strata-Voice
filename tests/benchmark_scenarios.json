@@ -77,6 +77,19 @@
       "query": "What's my dog's name?",
       "target_keys": ["biscuit"],
       "distractor_keys": []
+    },
+    {
+      "id": "aggregation-both",
+      "kind": "aggregation guard — a broad query must keep BOTH events (two-pass must NOT over-scope)",
+      "events": [
+        {"utterance": "I have an interview Tuesday with Acme for a backend engineering role",
+         "facts": ["Has an interview Tuesday with Acme for a backend engineering role"]},
+        {"utterance": "I also have an interview Thursday with Globex for a data analyst role",
+         "facts": ["Has an interview Thursday with Globex for a data analyst role"]}
+      ],
+      "query": "What are all my upcoming interviews?",
+      "target_keys": ["acme", "globex"],
+      "distractor_keys": []
     }
   ]
 }

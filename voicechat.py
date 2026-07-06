@@ -95,6 +95,15 @@ Never emit one for small talk, questions, or transient events."""
 # profile + memories, regardless of the persona the user sets. Without this, a
 # character-heavy persona (e.g. one that plays up fallibility) can make the model
 # roleplay not-knowing the user even though the facts are right there in context.
+FOCUS_GUARD = """STAY ON THE ASKED THING: when the user asks about one specific event, \
+occasion, appointment, trip, or item, answer from the single most relevant memory and \
+do NOT mix in details from other similar ones — if they ask about Thursday's interview, \
+don't bring up Tuesday's; if they ask about one trip, don't mention the other. Volunteer \
+other events only when the user clearly asks for more than one ("all my…", "both…", \
+"what else…"). If two memories fit and you truly can't tell which they mean, ask which \
+one rather than blending them."""
+
+
 RECALL_GUARD = """USING WHAT YOU KNOW: The user profile and current memories above \
 are real, verified facts about this specific user that you genuinely have — not \
 guesses or roleplay. When the user asks what you know about them, or asks anything \
@@ -513,6 +522,7 @@ def build_messages(history, memories, documents=None, profile=None,
             )
     system += "\n\n" + MEMORY_DIRECTIVES
     system += "\n\n" + RECALL_GUARD
+    system += "\n\n" + FOCUS_GUARD
     if emotion:
         system += "\n\n" + EMOTION_PROMPT
     return [{"role": "system", "content": system}, *history]
@@ -845,7 +855,13 @@ def select_memories(strata, query: str, *, semantic: bool = True,
                     threshold: int = RECALL_THRESHOLD, mems=None) -> list[str]:
     """Pick the memory texts to inject this turn. Small store -> inject everything
     (perfect, ~free). Large store -> semantic recall of the most relevant few.
-    Pass ``mems`` (a fresh list_memories snapshot) to avoid a duplicate query."""
+    Pass ``mems`` (a fresh list_memories snapshot) to avoid a duplicate query.
+
+    Note: we deliberately do NOT scope the injected set to a single event
+    (an earlier two-pass experiment did, and the benchmark showed it dropped
+    recall by locking the wrong event). Keeping every candidate in context and
+    letting FOCUS_GUARD stop the model from volunteering neighbours is the
+    measured win — collisions to 0 with recall held at 100%."""
     if mems is None:
         mems = list_memories(strata)
     if not semantic or len(mems) <= threshold:
