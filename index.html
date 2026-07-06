@@ -670,6 +670,16 @@
 
   /* ---------- memory tools (review / audit / eval) ---------- */
   .toolbar{ display:flex; flex-wrap:wrap; gap:.6rem; margin-bottom:1rem; }
+  .memsearch{ position:relative; margin-bottom:1rem; }
+  .memsearch svg{ position:absolute; left:.9rem; top:50%; transform:translateY(-50%);
+    width:1.05rem; height:1.05rem; color:var(--ink-faint); pointer-events:none; }
+  .memsearch input{ width:100%; height:2.9rem; padding:0 1rem 0 2.6rem; border-radius:999px;
+    border:1px solid var(--line); background:var(--surface-soft); color:var(--ink);
+    font:inherit; font-size:16px; }
+  .memsearch input::placeholder{ color:var(--ink-faint); }
+  .memsearch input:focus{ outline:none; border-color:var(--sage-deep);
+    box-shadow:0 0 0 3px oklch(0.66 0.10 133 / .16); }
+  .memsearch input::-webkit-search-cancel-button{ cursor:pointer; }
   .toolbtn{
     appearance:none; cursor:pointer; font:inherit; font-size:.86rem; font-weight:600;
     color:var(--sage-deep); background:var(--surface-soft);
@@ -1433,6 +1443,10 @@
           <button class="toolbtn" id="polishBtn" title="Drafts cleanups — tidies awkward memories, drops junk, and combines fragments of the same fact into one — you review and approve each change before anything happens">✨ Smooth memories</button>
         </div>
         <div id="memTools" class="toolresult" hidden></div>
+        <div class="memsearch">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="memSearch" type="search" autocomplete="off" spellcheck="false" placeholder="Search your memories…" aria-label="Search memories">
+        </div>
         <div id="memoriesBody"></div>
       </section>
 
@@ -2499,12 +2513,14 @@ function memWhen(t){
   return "added "+d.toLocaleDateString(undefined,{month:"short",day:"numeric"})+
          (d.getFullYear()!==now.getFullYear()?" "+d.getFullYear():"");
 }
-async function loadMemories(){
+function renderMemories(list, {searching=false}={}){
   const body=document.getElementById("memoriesBody");
-  body.innerHTML=skeleton(4);
-  let list=[]; try{ list=(await (await fetch("/memories")).json()).memories||[]; }catch(_){}
-  setMemSeen(list.length); hideLearned();   // viewing the list clears the "learned" nudge
-  if(!list.length){ body.innerHTML=`<div class="empty"><span class="big">Nothing remembered yet</span>Tell ${ASSISTANT_NAME} durable facts about you and they’ll appear here.</div>`; return; }
+  if(!list.length){
+    body.innerHTML=searching
+      ? `<div class="empty"><span class="big">No matches</span>Nothing stored matches that — try different words.</div>`
+      : `<div class="empty"><span class="big">Nothing remembered yet</span>Tell ${ASSISTANT_NAME} durable facts about you and they’ll appear here.</div>`;
+    return;
+  }
   body.innerHTML="";
   list.forEach(m=>{
     const row=document.createElement("div"); row.className="row memitem";
@@ -2514,12 +2530,34 @@ async function loadMemories(){
     row.querySelector(".x").addEventListener("click",(e)=>{
       confirmThenDelete(e.currentTarget, async()=>{
         await fetch("/memory/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:m.id})});
-        loadMemories();
+        const q=($("#memSearch").value||"").trim();
+        q ? searchMemories(q) : loadMemories();
       });
     });
     body.appendChild(row);
   });
 }
+async function loadMemories(){
+  const body=document.getElementById("memoriesBody");
+  const s=$("#memSearch"); if(s) s.value="";
+  body.innerHTML=skeleton(4);
+  let list=[]; try{ list=(await (await fetch("/memories")).json()).memories||[]; }catch(_){}
+  setMemSeen(list.length); hideLearned();   // viewing the list clears the "learned" nudge
+  renderMemories(list);
+}
+async function searchMemories(q){
+  const body=document.getElementById("memoriesBody");
+  let list=[]; try{ list=(await (await fetch("/memory/search?q="+encodeURIComponent(q))).json()).memories||[]; }catch(_){}
+  if(($("#memSearch").value||"").trim()!==q) return;   // a newer keystroke won; drop this result
+  renderMemories(list, {searching:true});
+}
+let _memSearchT=null;
+$("#memSearch").addEventListener("input",(e)=>{
+  const q=(e.target.value||"").trim();
+  clearTimeout(_memSearchT);
+  if(!q){ _memSearchT=setTimeout(()=>{ fetch("/memories").then(r=>r.json()).then(d=>renderMemories(d.memories||[])).catch(()=>{}); }, 150); return; }
+  _memSearchT=setTimeout(()=>searchMemories(q), 220);
+});
 
 async function loadFiles(){
   const body=document.getElementById("docList");

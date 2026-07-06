@@ -808,6 +808,25 @@ def list_memories(strata) -> list[dict]:
 # smoothed, decayed, recall-gated, or forgotten by accident. They are injected into
 # EVERY turn's prompt unconditionally — that unconditional-ness is the whole point.
 
+def search_memories(strata, query: str, embedder=None, limit: int = 40) -> list[dict]:
+    """Search the user's own memories. Word matches (substring) are precise, so
+    when there are any, return just those. Only when nothing matches literally do
+    we fall back to semantic recall — so a conceptual query ("job") still finds
+    "Works as a nurse". Empty query returns everything. Returns memory dicts."""
+    mems = list_memories(strata)
+    q = (query or "").strip().lower()
+    if not q:
+        return mems
+    hits = [m for m in mems if q in m["text"].lower()]
+    if hits:
+        return hits[:limit]
+    if embedder is not None:                    # no literal match → conceptual fallback
+        tmap = {m["text"]: m for m in mems}
+        sem = [tmap[t] for t in recall_memories(strata, query, top_k=8) if t in tmap]
+        return sem[:8]
+    return []
+
+
 def list_rules(strata) -> list[dict]:
     """Active standing rules, oldest first."""
     from strata.canonical.records import Status, RecordType

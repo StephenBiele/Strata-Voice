@@ -1791,6 +1791,12 @@ class Handler(BaseHTTPRequestHandler):
             # ids are 64-bit ints; stringify so JS doesn't round them past 2^53.
             mem = [{"id": str(m["id"]), "text": m["text"], "t": m.get("t")} for m in mem]
             return self._json(200, {"memories": mem})
+        if u.path == "/memory/search":
+            q = parse_qs(u.query).get("q", [""])[0]
+            with _lock:
+                hits = vc.search_memories(_strata, q, embedder=_embedder)
+            hits = [{"id": str(m["id"]), "text": m["text"], "t": m.get("t")} for m in hits]
+            return self._json(200, {"memories": hits})
         if u.path == "/rules":
             with _lock:
                 rules = vc.list_rules(_strata)
