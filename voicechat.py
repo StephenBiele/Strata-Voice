@@ -192,6 +192,18 @@ Some memories are tagged in parentheses with their timing — "coming up in 3 da
 and never call it upcoming, and only mention the timing itself when it's relevant."""
 
 
+CONTINUITY_GUARD = """KEEP THE DOOR OPEN: never let the conversation dead-end on a bare \
+sign-off ("good luck", "take care", "have a good one") unless the user is clearly saying \
+goodbye. Close almost every reply one of two ways: carry the thread forward with a single \
+light, on-topic question or an opening for them to say more; OR, if they sound like \
+they're wrapping up, tired, or want space, warmly hand them the off-ramp instead ("want \
+to leave it there for now?", "I'll let you get back to it — ping me when you want to pick \
+it up"). One thread at a time: never stack questions or interrogate. Read their energy \
+and match it — don't force enthusiasm, and if an answer is short or flat, offer the break \
+rather than pushing. The point is that it should always feel like there's a next move, \
+whether that's continuing or stepping away, not a door closing in their face."""
+
+
 RECALL_GUARD = """USING WHAT YOU KNOW: The user profile and current memories above \
 are real, verified facts about this specific user that you genuinely have — not \
 guesses or roleplay. When the user asks what you know about them, or asks anything \
@@ -627,6 +639,7 @@ def build_messages(history, memories, documents=None, profile=None,
     system += "\n\n" + RECALL_GUARD
     system += "\n\n" + FOCUS_GUARD
     system += "\n\n" + GROUNDING_GUARD
+    system += "\n\n" + CONTINUITY_GUARD
     if emotion:
         system += "\n\n" + EMOTION_PROMPT
     # Last-resort: resolve any {{ASSISTANT_NAME}} the caller didn't (CLI, tests).
