@@ -230,6 +230,13 @@ injected each turn; past a threshold, Strata's vector + lexical recall selects t
 relevant ones. Forgetting is deterministic and immediate — deletion never depends on an
 LLM's judgment — and incognito turns write nothing at all.
 
+Under the hood this drives Strata's L0 (raw turns), L1 (atomic facts), L1.5 (reviewable
+duplicate consolidation), and L4 (standing rules) tiers on Strata's canonical store,
+resolver, and in-memory vector index. The time-aware selection and event-recency logic
+described above lives in this app, layered over Strata's `recall()`. See Strata Memory's
+[Implementation Status](https://github.com/StephenBiele/strata-memory#-implementation-status)
+for the full ledger of what's wired versus roadmap.
+
 ## The models
 
 | Role | Model | Runs on |
