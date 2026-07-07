@@ -3215,6 +3215,9 @@ function renderPolish(changes){
     const el=$("#polishCount"); if(el) el.textContent = n ? `${n} suggestion${n===1?"":"s"} pending` : "all reviewed";
     return n;
   };
+  const payload=(c)=> c.action==="merge"
+    ? {action:"merge", proposal_id:c.proposal_id, members:c.members, text:c.text}
+    : {id:c.id, action:c.action, old:c.old, text:c.text};
   const bar=document.createElement("div"); bar.style.cssText="display:flex;gap:.5rem;margin-bottom:.7rem;flex-wrap:wrap";
   const allBtn=document.createElement("button"); allBtn.className="toolbtn"; allBtn.textContent="Apply all";
   const noneBtn=document.createElement("button"); noneBtn.className="toolbtn"; noneBtn.textContent="Dismiss all";
@@ -3224,7 +3227,11 @@ function renderPolish(changes){
     let editArea=null;
     const paint=()=>{
       el.innerHTML="";
-      if(ch.action==="rewrite"){
+      if(ch.action==="merge"){
+        el.insertAdjacentHTML("beforeend",`<div class="muted" style="margin-bottom:.3rem">Combine ${ch.members.length} duplicates into one:</div>`
+          + ch.members.map(m=>`<div class="drop">${esc(m.text)}</div>`).join("")
+          + `<div class="keep">→ ${esc(ch.text)}</div>`);
+      }else if(ch.action==="rewrite"){
         el.insertAdjacentHTML("beforeend",`<div class="drop">${esc(ch.old)}</div>`);
         if(editArea) el.appendChild(editArea);
         else el.insertAdjacentHTML("beforeend",`<div class="keep">→ ${esc(ch.text)}</div>`);
@@ -3233,11 +3240,11 @@ function renderPolish(changes){
       }
       const row=document.createElement("div"); row.style.cssText="display:flex;gap:.45rem;margin-top:.45rem";
       const ap=document.createElement("button"); ap.className="toolbtn";
-      ap.textContent = ch.action==="delete" ? "Remove it" : "Apply";
+      ap.textContent = ch.action==="delete" ? "Remove it" : (ch.action==="merge" ? "Merge" : "Apply");
       ap.addEventListener("click", async()=>{
         if(editArea && editArea.value.trim()) ch.text=editArea.value.trim();
         ap.disabled=true; ap.textContent="Applying…";
-        const d=await applyPolish([{id:ch.id,action:ch.action,old:ch.old,text:ch.text}]);
+        const d=await applyPolish([payload(ch)]);
         ch._done=true;
         el.innerHTML = d.applied ? '<div class="muted">Applied ✓</div>'
           : '<div class="muted">Skipped — that memory changed since the review. Run smoothing again for a fresh look.</div>';
@@ -3267,7 +3274,7 @@ function renderPolish(changes){
     const todo=changes.filter(c=>!c._done);
     if(!todo.length) return;
     allBtn.disabled=noneBtn.disabled=true; allBtn.textContent="Applying…";
-    const d=await applyPolish(todo.map(c=>({id:c.id,action:c.action,old:c.old,text:c.text})));
+    const d=await applyPolish(todo.map(payload));
     todo.forEach(c=>{ c._done=true; c._card.innerHTML='<div class="muted">Applied ✓</div>'; });
     allBtn.textContent=`Applied ${d.applied}${d.skipped?` · ${d.skipped} skipped`:""}`;
     counts(); loadMemories();

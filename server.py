@@ -2078,6 +2078,11 @@ class Handler(BaseHTTPRequestHandler):
             # ids stringified: 64-bit ints round past 2^53 in JS
             out = [{"id": str(ch["id"]), "action": ch["action"], "old": ch["old"],
                     **({"text": ch["text"]} if ch.get("text") else {})} for ch in changes]
+            # L1.5 aggregation buffer: deterministic near-duplicate MERGE suggestions,
+            # surfaced ahead of the LLM's wording fixes in the same review list.
+            with _lock:
+                merges = vc.consolidation_proposals(_strata)
+            out = merges + out
             return self._json(200, {"ok": True, "changes": out,
                                     "total": len(mems), "kept": len(mems) - len(out)})
         if u.path == "/memory/polish/apply":
@@ -2089,6 +2094,21 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 current = {str(m["id"]): m["text"] for m in vc.list_memories(_strata)}
                 for ch in body.get("changes", []):
+                    if ch.get("action") == "merge":
+                        # L1.5 merge: apply through the engine's reflection so provenance
+                        # is preserved. Only if every member still reads as it did at review.
+                        members = ch.get("members", [])
+                        if len(members) < 2 or any(
+                                current.get(str(m.get("id"))) != m.get("text") for m in members):
+                            skipped += 1
+                            continue
+                        try:
+                            _strata.reflection.apply(ch.get("proposal_id"))
+                            applied += 1
+                        except Exception as e:
+                            print(f"[memory] merge apply failed: {e}")
+                            skipped += 1
+                        continue
                     mid = str(ch.get("id", ""))
                     if current.get(mid) != ch.get("old"):
                         skipped += 1

@@ -1745,6 +1745,40 @@ def polish_memory_store(memories: list[dict], cfg: dict | None = None) -> list[d
     return out
 
 
+def consolidation_proposals(strata) -> list[dict]:
+    """L1.5 aggregation buffer (Strata's reflection engine): cluster near-duplicate
+    L1 facts and return reviewable MERGE suggestions, shaped like the polish changes
+    so both feed one review list. Propose-only — we reset the proposal store and lift
+    the auto-accept threshold so even exact duplicates wait for the user's click,
+    matching the app's 'nothing changes until you approve' contract."""
+    try:
+        from strata.reflection.proposals import ProposalKind, ProposalState, ProposalStore
+    except Exception as e:
+        print(f"[memory] L1.5 unavailable: {e}")
+        return []
+    refl = getattr(strata, "reflection", None)
+    if refl is None:
+        return []
+    refl.proposals = ProposalStore()        # fresh — drop any prior run's proposals
+    refl.auto_accept_threshold = 2.0        # nothing auto-merges; every cluster is reviewable
+    try:
+        refl.consolidate()
+    except Exception as e:
+        print(f"[memory] L1.5 consolidate failed: {e}")
+        return []
+    id2text = {m["id"]: m["text"] for m in list_memories(strata)}
+    out = []
+    for p in refl.proposals.list(state=ProposalState.USER_REVIEW_REQUIRED):
+        if p.kind is not ProposalKind.MERGE:
+            continue
+        members = [{"id": str(rid), "text": id2text.get(rid, "")} for rid in p.record_ids]
+        if len(members) < 2 or any(not m["text"] for m in members):
+            continue                        # a member vanished since clustering — skip
+        out.append({"action": "merge", "proposal_id": p.id, "members": members,
+                    "text": p.target_content or members[0]["text"]})
+    return out
+
+
 # ---- events & timeline (episodic spine) --------------------------------------
 def record_event(strata, text: str, *, ts_ms: int | None = None) -> int | None:
     """Write a conversational turn as a raw L0 event (the episodic spine). Returns
