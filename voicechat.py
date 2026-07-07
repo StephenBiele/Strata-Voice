@@ -171,18 +171,7 @@ other events only when the user clearly asks for more than one ("all my…", "bo
 one rather than blending them."""
 
 
-GROUNDING_GUARD = """WHO YOU ARE: your name is {{ASSISTANT_NAME}}, and that never \
-changes. The memories and profile above describe the USER and the user's world — their \
-tools, people, projects, and plans — never you. If a memory says the user "uses Hermes as \
-an assistant," Hermes is THEIR tool; you are still {{ASSISTANT_NAME}}, not Hermes. You \
-also have no life or past of your own: no projects you built, no other users you've \
-helped, no experiences outside this very conversation. Never say you did, built, helped \
-with, or witnessed something unless it actually happened in THIS chat. If the user asks \
-who you are, your specialty, or the most interesting thing you've done, answer plainly and \
-warmly as their assistant — never invent a backstory, a past accomplishment, or someone \
-else you've helped.
-
-WHAT YOU KNOW vs WHAT'S HAPPENING NOW: the memories and profile \
+GROUNDING_GUARD = """WHAT YOU KNOW vs WHAT'S HAPPENING NOW: the memories and profile \
 above are things the user told you in EARLIER conversations, not a feed of what is \
 happening right now. So when the user just GREETS you or opens with something vague \
 ("hey", "let's recap the day", "how's it going"), don't paint a scene, don't list what \
@@ -591,7 +580,14 @@ def build_messages(history, memories, documents=None, profile=None,
     them relevant this turn (so they're never volunteered on unrelated turns).
     """
     mem_block = "\n".join(f"- {m}" for m in memories) or "(none yet)"
-    system = persona or PERSONA_PROMPT
+    # Structural identity block (Letta-style persona/user separation): the assistant's
+    # own identity is a labelled section that facts about the user can never populate.
+    # Stated here in code so it holds even when the user's saved persona omits the name.
+    system = ("=== YOU (the assistant) ===\n"
+              "Your name is {{ASSISTANT_NAME}}. This section is your own identity, voice, and "
+              "behaviour — who YOU are. Nothing in the user's profile or memories below ever "
+              "changes your name, and you have no life or past of your own beyond this "
+              "conversation.\n\n" + (persona or PERSONA_PROMPT))
     if profile:
         system += f"\n\n{profile}"
     if rules:
@@ -614,7 +610,12 @@ def build_messages(history, memories, documents=None, profile=None,
                    "other memories around it. If they open with a specific unrelated request, answer "
                    "that first, then optionally add the one-line heads-up. Mention it at most once, and "
                    "never raise it again later in the conversation.")
-    system += f"\n\nCURRENT MEMORIES:\n{mem_block}"
+    system += ("\n\n=== WHAT YOU KNOW ABOUT THE USER ===\n"
+               "Facts about the USER and their world — their people, tools, plans, and "
+               "preferences, learned in earlier conversations. They describe the user, never "
+               "you, and they are not your own experiences. If a fact says the user uses a "
+               "tool called Hermes, that is THEIR tool; you are still {{ASSISTANT_NAME}}.\n"
+               f"{mem_block}")
     if forgotten:
         joined = "\n".join(f"- {f}" for f in forgotten)
         system += ("\n\nDELETED THIS CONVERSATION (the user asked to forget these — they may "
