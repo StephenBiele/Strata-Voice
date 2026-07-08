@@ -1557,6 +1557,11 @@ _EXTRACT_PROMPT = """You pull durable facts about the user out of their latest m
 The message is a voice transcript and may contain mis-transcriptions, filler, and run-ons — NEVER copy \
 garbled wording into a fact. Write each fact cleanly in your own words; if a passage is too garbled to \
 be sure what was meant, skip it rather than guess.
+Record only what the user ACTUALLY said. Do not infer broader personality traits, labels, or \
+conclusions from a specific statement: "prefers a cozy night in" stays "Prefers a cozy night in" \
+— never generalize it to "Is a homebody". Stay as close to their meaning as the wording allows.
+Capture each distinct idea ONCE. Do not split a single thought into several overlapping facts, and \
+do not restate the same idea in different words — one clean fact per thing the user told you.
 Copy anchor details — names, dates, days of the week, times, numbers, places, and titles — EXACTLY as the user said them; paraphrase only the wording around them, never the anchors.
 Facts are read aloud by a voice, so spell everything out ("Arvada, Colorado" — never "Arvada, Co.").
 Never begin a fact with "The user" — start with the verb or noun ("Has a dog named Molly", "Getting into bouldering").
@@ -1644,6 +1649,10 @@ and the role in a third become one fact: "Has an interview next Tuesday with the
 building internal tools").
 The transcript is from speech recognition and may contain mis-transcriptions and clipped sentence \
 starts — never copy garbled wording; write each fact cleanly, and skip what you can't confidently parse.
+Record only what the user ACTUALLY said. Do not infer broader personality traits, labels, or \
+conclusions: "prefers a cozy night in" stays "Prefers a cozy night in" — never generalize it to \
+"Is a homebody". Capture each distinct idea ONCE — do not emit several overlapping facts for the same \
+thought, and do not restate the same idea in different words. One clean fact per thing they told you.
 Copy anchor details — names, dates, days of the week, times, numbers, places, and titles — EXACTLY as the user said them; paraphrase only the wording around them, never the anchors.
 Facts are read aloud by a voice, so spell everything out ("Arvada, Colorado" — never "Arvada, Co.").
 Never begin a fact with "The user" — start with the verb or noun ("Has a dog named Molly", "Getting into bouldering").
@@ -1779,8 +1788,14 @@ Durable interests survive: "Getting into bouldering" is a keep even though a sin
 
 CONSOLIDATE FRAGMENTS: when two or more memories are pieces of the SAME fact \
 ("Has an interview Tuesday" + "Interviewing at Acme"), rewrite ONE of them into the \
-single complete fact ("Has an interview Tuesday with Acme") and delete the other piece(s). \
-Only combine memories that truly describe the same thing — NEVER merge memories that differ \
+single complete fact ("Has an interview Tuesday with Acme") and delete the other piece(s).
+
+REDUNDANT RESTATEMENTS: when two memories say essentially the SAME thing in different words — \
+even though they are NOT word-for-word identical — keep the clearest, most complete one and \
+delete the other. Example: "Prefers quiet parks where they can hear themselves think" and "Likes \
+places where they can hear themselves think" are the same preference twice; keep one, delete the other.
+
+Only combine or dedupe memories that truly describe the same thing — NEVER merge memories that differ \
 on a name, date, company, place, or number: two different interviews, two different trips, \
 and two different people each stay as their own separate memory.
 
