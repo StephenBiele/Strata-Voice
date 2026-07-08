@@ -880,13 +880,78 @@ def _ground_facts(facts: list[str], source: str) -> list[str]:
     return kept
 
 
-def _add_or_supersede(strata, fact: str, memories: list[dict]):
+# Write-side adjudication (Mem0-style Add/Update, kept conservative). When a new
+# fact clearly REPLACES an old one (same aspect of the user's life, changed value —
+# "unemployed" -> "works as a nurse"), the old fact is marked SUPERSEDED so it drops
+# out of active recall. It is NOT deleted (status change is recoverable, keeps
+# provenance) and coexisting facts (two pets, two interviews) are never touched —
+# Mem0 dropped aggressive reconciliation precisely because it silently ate facts.
+_ADJUDICATE_PROMPT = """A new durable fact about the user was just learned:
+NEW: "{new}"
+
+Existing stored facts about the user, numbered:
+{existing}
+
+Only flag a fact when the NEW one makes it literally FALSE — the same single-valued \
+attribute of the user's life (their one current job, their one home, their one relationship \
+status) now has a different value, so both cannot be true at once.
+OUTDATED (flag these):
+- NEW "Works as a nurse" outdates "Is unemployed" (you can't be both).
+- NEW "Lives in Arvada, Colorado" outdates "Lives in Denver" (you live in one place).
+- NEW "Is married" outdates "Is engaged".
+COEXIST — never flag these, even though they look similar:
+- Two of the same KIND of thing at a different time, place, company, or person are BOTH real:
+  "Has an interview with Globex" does NOT outdate "Has an interview with Acme" (two interviews);
+  "Has a cat named Pixel" does NOT outdate "Has a dog named Molly" (two pets);
+  "Has a meeting Thursday" does NOT outdate "Has a meeting Tuesday" (two meetings).
+- Anything about a different topic, or merely related.
+The old fact must be genuinely REPLACED, not just accompanied. When unsure, the answer is NONE.
+Reply with ONLY the number(s) of genuinely-replaced facts, comma-separated, or exactly: NONE"""
+
+
+def _stale_by(fact: str, memories: list[dict], cfg: dict | None) -> list:
+    """Ids of existing facts that `fact` makes outdated (same aspect, changed value).
+    Strict LLM adjudication at temperature 0; returns [] on any doubt or error. Runs
+    only in the background write path, never on the response path."""
+    cands = [m for m in memories if m["text"].lower() != fact.lower()]
+    if not cands:
+        return []
+    numbered = "\n".join(f"{i+1}. {m['text']}" for i, m in enumerate(cands))
+    try:
+        raw = llm_complete([{"role": "user",
+                             "content": _ADJUDICATE_PROMPT.format(new=fact, existing=numbered)}],
+                           _mem_cfg(cfg))
+    except Exception as e:
+        print(f"  · adjudication skipped ({e})")
+        return []
+    line = (raw or "").strip().splitlines()[0].strip() if raw else ""
+    if not line or line.upper().startswith("NONE"):
+        return []
+    out = []
+    for tok in re.findall(r"\d+", line):
+        i = int(tok) - 1
+        if 0 <= i < len(cands):
+            out.append(cands[i]["id"])
+    return out
+
+
+def _add_or_supersede(strata, fact: str, memories: list[dict], cfg: dict | None = None):
     """Write or update a fact. Returns the canonical record id of the written/
     updated fact, or None on an exact duplicate (nothing changed). Supersede only
     when the new fact is genuinely a restatement of an existing one — anchor-aware,
     so two distinct-but-similar facts (two interviews, two people) never clobber
-    each other."""
+    each other. With ``cfg`` (background path only) it also runs contradiction
+    adjudication: an old fact this one plainly replaces is marked SUPERSEDED."""
     fl = fact.lower()
+    # Contradiction adjudication runs first, even for a fact we already store, so a
+    # fact written earlier via [MEM_ADD] can still retire what it now contradicts.
+    if cfg is not None:
+        for old_id in _stale_by(fact, memories, cfg):
+            try:
+                strata.update_memory(old_id, status="superseded")
+                print(f"  · memory retired (contradicted by {fact!r}): id={old_id}")
+            except Exception as e:
+                print(f"  · retire failed ({e})")
     for m in memories:
         if m["text"].lower() == fl:
             return None  # exact dup
@@ -1552,16 +1617,18 @@ def extract_facts_llm(user_text: str, existing: list[str], cfg: dict | None = No
     return _ground_facts(out, text + " " + (context or ""))[:5]
 
 
-def add_facts(strata, facts: list[str], event_id: int | None = None) -> list[str]:
+def add_facts(strata, facts: list[str], event_id: int | None = None,
+              cfg: dict | None = None) -> list[str]:
     """Persist extracted facts via the same dedup/supersede path. Returns new ones.
-    Links each new fact to ``event_id`` (its source turn) when provided."""
+    Links each new fact to ``event_id`` (its source turn) when provided. ``cfg``
+    enables background contradiction adjudication (retire facts this one replaces)."""
     if not facts:
         return []
     memories = list_memories(strata)
     added = []
     for f in facts:
         before = {m["text"] for m in memories}
-        rid = _add_or_supersede(strata, f, memories)
+        rid = _add_or_supersede(strata, f, memories, cfg)
         memories.append({"id": rid or -1, "text": f})
         if rid and event_id:
             _link_source(strata, rid, event_id)
@@ -1663,12 +1730,13 @@ def _match_event(events: list[dict], quote: str) -> int | None:
     return best if best_score >= 0.6 else None
 
 
-def add_harvested_facts(strata, harvested: list[dict]) -> list[str]:
+def add_harvested_facts(strata, harvested: list[dict], cfg: dict | None = None) -> list[str]:
     """Store harvested {fact, quote} items — but ONLY when the quote grounds to a
     real user turn. This is the guard against exactly what went wrong: a fact the
     user never said (the assistant's, a negation flipped positive, or the model
     parroting a prompt example) has no matching user utterance, so it's dropped
-    rather than stored untraceable. Survivors are source-linked to that turn."""
+    rather than stored untraceable. Survivors are source-linked to that turn.
+    ``cfg`` enables background contradiction adjudication."""
     if not harvested:
         return []
     events = list_events(strata)
@@ -1683,7 +1751,7 @@ def add_harvested_facts(strata, harvested: list[dict]) -> list[str]:
             print(f"[memory] harvest dropped (no user source): {fact!r}")
             continue
         before = {m["text"] for m in memories}
-        rid = _add_or_supersede(strata, fact, memories)
+        rid = _add_or_supersede(strata, fact, memories, cfg)
         memories.append({"id": rid or -1, "text": fact})
         if rid:
             _link_source(strata, rid, ev_id)
@@ -2047,7 +2115,7 @@ def review_session(strata, turns: list[dict], cfg: dict | None = None) -> dict:
     """Returns {added: [new facts], assessment: {...}}."""
     user_text = "\n".join(t["content"] for t in turns if t.get("role") == "user")
     existing = [m["text"] for m in list_memories(strata)]
-    added = add_facts(strata, extract_facts_llm(user_text, existing, cfg))
+    added = add_facts(strata, extract_facts_llm(user_text, existing, cfg), cfg=cfg)
 
     assessment = {}
     try:

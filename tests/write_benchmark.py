@@ -48,11 +48,11 @@ def run_scenario(sc, embedder) -> dict:
             existing = [m["text"] for m in vc.list_memories(st)]
             ctx = "\n".join(f"{x['role']}: {x['content']}" for x in turns[max(0, i - 6):i])
             facts = vc.extract_facts_llm(t["content"], existing, LLM_CFG, context=ctx)
-            vc.add_facts(st, facts, eid)
+            vc.add_facts(st, facts, eid, LLM_CFG)   # cfg -> exercises write-side adjudication
         # end-of-call harvest (grounded, source-linked)
         existing = [m["text"] for m in vc.list_memories(st)]
         harvested = vc.harvest_session_facts(turns, existing, LLM_CFG)
-        vc.add_harvested_facts(st, harvested)
+        vc.add_harvested_facts(st, harvested, LLM_CFG)
 
         stored = [m["text"] for m in vc.list_memories(st)]
         st.close()

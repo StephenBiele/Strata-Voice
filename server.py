@@ -785,7 +785,7 @@ def _backfill_recaps() -> None:
                     facts = vc.harvest_session_facts(s["turns"], existing, _mem_llm_cfg())
                     if facts:
                         with _lock:
-                            added = vc.add_harvested_facts(bf, facts)   # source-linked
+                            added = vc.add_harvested_facts(bf, facts, _mem_llm_cfg())   # source-linked
                         if added:
                             print("[memory] harvested (backfill):", added)
                 except Exception as e:
@@ -840,14 +840,14 @@ def _memory_worker() -> None:
                     polished = vc.polish_fact(candidate, cfg)          # slow LLM, off-lock
                     if polished:
                         with _lock:
-                            added = vc.add_facts(st, [polished], event_id)
+                            added = vc.add_facts(st, [polished], event_id, cfg)
                         if added:
                             print("[memory] remembered:", added)
                 existing = [m["text"] for m in vc.list_memories(st)]   # read, off-lock
                 new_facts = vc.extract_facts_llm(text, existing, cfg, context=ctx)  # slow LLM, off-lock
                 if new_facts:
                     with _lock:                                        # brief write, serialized
-                        added = vc.add_facts(st, new_facts, event_id)
+                        added = vc.add_facts(st, new_facts, event_id, cfg)
                     if added:
                         print("[memory] extracted:", added)
                 print(f"[memory] turn job done in {time.monotonic()-t0:.1f}s "
@@ -1360,7 +1360,7 @@ def _recap_session(sess: dict) -> None:
         facts = vc.harvest_session_facts(sess["turns"], existing, _mem_llm_cfg())  # slow, off-lock
         if facts:
             with _lock:
-                added = vc.add_harvested_facts(_strata, facts)   # source-linked
+                added = vc.add_harvested_facts(_strata, facts, _mem_llm_cfg())   # source-linked
             if added:
                 print("[memory] harvested:", added)
     except Exception as e:
