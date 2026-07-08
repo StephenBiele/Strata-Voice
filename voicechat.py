@@ -158,19 +158,6 @@ so tense words like "upcoming" go stale and must be left out.
 Only emit a directive for genuinely durable facts or explicit forget requests. \
 Never emit one for small talk, questions, or transient events."""
 
-# Always appended (not user-editable). Guarantees the model actually USES the
-# profile + memories, regardless of the persona the user sets. Without this, a
-# character-heavy persona (e.g. one that plays up fallibility) can make the model
-# roleplay not-knowing the user even though the facts are right there in context.
-FOCUS_GUARD = """STAY ON THE ASKED THING: when the user asks about one specific event, \
-occasion, appointment, trip, or item, answer from the single most relevant memory and \
-do NOT mix in details from other similar ones — if they ask about Thursday's interview, \
-don't bring up Tuesday's; if they ask about one trip, don't mention the other. Volunteer \
-other events only when the user clearly asks for more than one ("all my…", "both…", \
-"what else…"). If two memories fit and you truly can't tell which they mean, ask which \
-one rather than blending them."""
-
-
 GROUNDING_GUARD = """WHAT YOU KNOW vs WHAT'S HAPPENING NOW: the memories and profile \
 above are things the user told you in EARLIER conversations, not a feed of what is \
 happening right now. So when the user just GREETS you or opens with something vague \
@@ -203,22 +190,6 @@ and match it — don't force enthusiasm, and if an answer is short or flat, offe
 rather than pushing. The point is that it should always feel like there's a next move, \
 whether that's continuing or stepping away, not a door closing in their face."""
 
-
-RECALL_GUARD = """USING WHAT YOU KNOW: The user profile and current memories above \
-are real, verified facts about this specific user that you genuinely have — not \
-guesses or roleplay. When the user asks what you know about them, or asks anything \
-the profile or memories cover (their name, where they live, their job, their pets, \
-preferences, anything listed), answer directly and confidently from that \
-information. Never claim you don't know them, can't remember, or might be \
-misremembering something that is listed above — it is correct, so do not deny, \
-hedge, or downplay it. Weave it in naturally instead of reciting a list.
-STICK TO WHAT THE MEMORY ACTUALLY SAYS. State only what is written; never add \
-specifics it does not contain — no invented names, titles, companies, projects, \
-dates, times, or numbers. If a memory is general ("preparing for interviews with \
-managers"), keep your reply just as general; do NOT sharpen it into a specific claim \
-("your Thursday interview with the head of engineering about the dashboard"). Being \
-confident means trusting the fact as written, not embellishing it. When you need a \
-detail the memory doesn't have, ask instead of inventing one."""
 
 _THINK_TAG = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
@@ -648,8 +619,11 @@ def build_messages(history, memories, documents=None, profile=None,
                 "checked —\", \"From a quick search,\"."
             )
     system += "\n\n" + MEMORY_DIRECTIVES
-    system += "\n\n" + RECALL_GUARD
-    system += "\n\n" + FOCUS_GUARD
+    # RECALL_GUARD and FOCUS_GUARD were pruned after a qwen3.6 audit: recall stayed
+    # flat (92%), cross-event collisions stayed 0/12, and vague-memory embellishment
+    # stayed 0/23 — all identical with or without them. Inert on the recommended
+    # model. GROUNDING (stops scene-painting: 0 vs 2/3) and CONTINUITY (stops
+    # dead-ends: 0 vs 4/8) measurably earn their place, so they stay.
     system += "\n\n" + GROUNDING_GUARD
     system += "\n\n" + CONTINUITY_GUARD
     if emotion:
@@ -1394,9 +1368,9 @@ def select_memories(strata, query: str, *, semantic: bool = True,
 
     Note: we deliberately do NOT scope the injected set to a single event
     (an earlier two-pass experiment did, and the benchmark showed it dropped
-    recall by locking the wrong event). Keeping every candidate in context and
-    letting FOCUS_GUARD stop the model from volunteering neighbours is the
-    measured win — collisions to 0 with recall held at 100%."""
+    recall by locking the wrong event). Keeping every candidate in context is
+    the measured win — on the recommended model, cross-event collisions stay at
+    0 without any dedicated focus instruction."""
     if mems is None:
         mems = list_memories(strata)
     small = not semantic or len(mems) <= threshold
