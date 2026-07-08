@@ -465,10 +465,11 @@
 
   /* background-work pill (memory extraction / conversation wrap-up) */
   .bgpill{
-    /* centered and lifted — the old bottom-right spot sat under the conversation
-       drawer and covered its controls */
+    /* top-centered, in the clear gap below the header and above the orb — the only
+       spot free in BOTH states: the bottom is taken by the call controls when live
+       and by the "Start a new conversation" button once the conversation ends */
     position:fixed; left:50%; transform:translateX(-50%);
-    bottom:calc(clamp(1.4rem,4vh,2.6rem) + 7.5rem + env(safe-area-inset-bottom)); z-index:50;
+    top:calc(env(safe-area-inset-top) + 7.2rem); z-index:50; max-width:min(88vw, 26rem);
     display:inline-flex; align-items:center; gap:.45rem;
     font-size:.76rem; font-weight:600; color:var(--ink-soft); letter-spacing:.02em;
     padding:.4rem .75rem; border-radius:999px; border:1px solid var(--line);
@@ -484,7 +485,7 @@
     animation:bgdot-pulse 1.4s ease-in-out infinite;
   }
   @keyframes bgdot-pulse{ 0%,100%{ opacity:.35; transform:scale(.85); } 50%{ opacity:1; transform:scale(1); } }
-  @keyframes bgpill-in{ from{ opacity:0; transform:translateX(-50%) translateY(6px); } to{ opacity:1; transform:translateX(-50%); } }
+  @keyframes bgpill-in{ from{ opacity:0; transform:translateX(-50%) translateY(-6px); } to{ opacity:1; transform:translateX(-50%); } }
   /* "here's what I've learned" — a rare, tappable moment of trust, not a nag */
   .learnedcard{
     position:fixed; z-index:55; left:50%; top:calc(env(safe-area-inset-top) + 6.6rem);
@@ -1065,9 +1066,6 @@
     .controls .callcomposer{ flex-basis:100%; order:1; }
     .controls .callcomposer input{ font-size:16px; }  /* also stops mobile zoom-on-focus */
     #muteBtn{ order:2; } #endBtn{ order:3; }
-    /* the background-work pill lives at the top on phones — the bottom belongs
-       to the controls (it used to sit right on the Send/End buttons) */
-    .bgpill{ bottom:auto; top:calc(env(safe-area-inset-top) + 4.6rem); }
     .caption{ max-width:88vw; }
   }
 </style>
