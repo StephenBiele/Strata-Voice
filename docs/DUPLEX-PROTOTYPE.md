@@ -15,6 +15,32 @@ at a step boundary, driven by the existing Ollama LLM running recall in the
 background. Memory *writes* never involve the speech model: transcripts flow
 into the existing harvest path, so the DATA-SAFETY contract is untouched.
 
+## What's built so far (runs off a Mac too)
+
+- `duplex/role_prompt.py` — pure role-prompt assembly (head + profile + L4
+  rules + budgeted memories). No I/O; shared by everything below.
+- `duplex/personaplex_prompt.py` — experiment-1 CLI. Builds the prompt from the
+  WHOLE store and (`--launch`) starts the MLX port with it. `--bare` control.
+- `duplex/cortex.py` — the background brain: the WRITE + RECALL orchestration
+  that would run alongside PersonaPlex. Records each user turn as an L0 event,
+  decides when newly-relevant recall warrants a re-prefill (`plan_reprefill`),
+  and harvests durable facts at session end — all through the *existing* memory
+  functions (`select_memories`, `record_event`, `harvest_session_facts`,
+  `add_harvested_facts`). The actual KV-cache swap is left behind the
+  `ReprefillSink` interface — that's the one seam that needs the port's
+  generation loop, wired on the Mac once experiment 2 confirms prefill is fast.
+- `tests/test_duplex_cortex.py` — dependency-free tests (no strata/Ollama/MLX,
+  so they run in CI and here) covering prompt budgeting, the re-prefill
+  decision, small-store-never-swaps, topic-shift-triggers-one-swap, and
+  harvest-on-finish. `python tests/test_duplex_cortex.py` → 26 pass.
+
+The cortex is transport-agnostic: `StrataBackend` wraps the real pipeline for
+the Mac, `FakeBackend` (in the test) scripts recall/harvest for verification.
+What remains for a live duplex mode is the transport itself — a PersonaPlex
+sidecar speaking WebSocket audio, Parakeet on the user side, and a
+`ReprefillSink` implementation that replays history into a rebuilt cache. That
+last piece is gated on experiment 2's numbers, below.
+
 ## Setup (Apple Silicon Mac, Python 3.12)
 
 ```bash

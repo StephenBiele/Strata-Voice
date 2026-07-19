@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 import voicechat as vc  # noqa: E402  (list_memories / list_rules / DB_PATH)
+from duplex import role_prompt  # noqa: E402
 
 STORE = Path(vc.DB_PATH).parent / "voicechat"
 PROFILE_FILE = STORE / "profile.json"
@@ -43,7 +44,7 @@ SETTINGS_FILE = STORE / "settings.json"
 # The Moshi-style context the prompt prefills into is small, and long prompts
 # eat into conversation headroom — so the whole prompt gets a character budget.
 # Rules and profile are kept whole; memories are trimmed newest-first-kept.
-DEFAULT_BUDGET = int(os.environ.get("DUPLEX_PROMPT_CHARS", "2000"))
+DEFAULT_BUDGET = int(os.environ.get("DUPLEX_PROMPT_CHARS", str(role_prompt.DEFAULT_BUDGET)))
 
 
 def _read_json(path: Path, default):
@@ -53,56 +54,22 @@ def _read_json(path: Path, default):
         return default
 
 
-def _profile_lines(profile: dict) -> list[str]:
-    labels = {"name": "Their full name is",
-              "preferred_name": "They prefer to be called",
-              "location": "They live in",
-              "gender": "Their gender is"}
-    return [f"{labels[k]} {profile[k]}." for k in labels if profile.get(k)]
-
-
 def build_role_prompt(strata, budget: int = DEFAULT_BUDGET) -> str:
+    """Session-start prompt from the WHOLE store — the experiment-1 condition.
+    (The cortex builds from a recalled subset instead; both share role_prompt.)"""
     settings = _read_json(SETTINGS_FILE, {})
     profile = _read_json(PROFILE_FILE, {})
-    name = settings.get("assistant_name") or vc.ASSISTANT_NAME_DEFAULT
-    user = profile.get("preferred_name") or profile.get("name") or "the user"
-
-    head = (f"You are {name}, {user}'s personal voice assistant. You are warm, "
-            "natural, and brief — one or two spoken sentences at a time, never "
-            "lists read aloud. You have talked with them before and remember "
-            "what they've told you; bring facts up only when relevant.")
-
-    parts = [head]
-    prof = _profile_lines(profile)
-    if prof:
-        parts.append(" ".join(prof))
-
-    rules = [r["text"] for r in vc.list_rules(strata)]
-    if rules:
-        parts.append("Rules they have set, which you always follow: "
-                     + " ".join(f"{t.rstrip('.')}." for t in rules))
-
-    mems = [m["text"] for m in vc.list_memories(strata)]
-    if mems:
-        # Fit newest memories into whatever budget remains after the fixed parts.
-        fixed = "\n\n".join(parts) + "\n\nThings you know about them:\n"
-        room = budget - len(fixed)
-        kept: list[str] = []
-        for text in reversed(mems):                    # newest first
-            line = f"- {text}\n"
-            if room - len(line) < 0:
-                break
-            room -= len(line)
-            kept.append(line)
-        if kept:
-            parts.append("Things you know about them:\n"
-                         + "".join(reversed(kept)).rstrip())
-        dropped = len(mems) - len(kept)
-        if dropped:
-            print(f"[bridge] budget {budget} chars: kept {len(kept)}/{len(mems)} "
-                  f"memories (dropped the {dropped} oldest)", file=sys.stderr)
-
-    return "\n\n".join(parts)
+    prompt, dropped = role_prompt.build(
+        assistant_name=settings.get("assistant_name") or vc.ASSISTANT_NAME_DEFAULT,
+        user_name=profile.get("preferred_name") or profile.get("name") or "the user",
+        profile=role_prompt.profile_lines(profile),
+        rules=[r["text"] for r in vc.list_rules(strata)],
+        memories=[m["text"] for m in vc.list_memories(strata)],
+        budget=budget)
+    if dropped:
+        print(f"[bridge] budget {budget} chars: dropped the {dropped} oldest "
+              "memories to fit", file=sys.stderr)
+    return prompt
 
 
 def main() -> None:
