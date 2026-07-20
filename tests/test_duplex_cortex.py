@@ -26,9 +26,11 @@ from duplex.cortex import Cortex, CortexConfig, plan_reprefill  # noqa: E402
 class RecordingSink:
     def __init__(self):
         self.prompts = []
+        self.deltas = []
 
-    def reprefill(self, prompt):
+    def reprefill(self, prompt, added):
         self.prompts.append(prompt)
+        self.deltas.append(added)
 
 
 class FakeBackend:
@@ -160,6 +162,8 @@ def test_large_store_reprefill_on_topic_shift():
     check("exactly one re-prefill issued", cx.prefill_count == 1 and len(sink.prompts) == 1)
     check("re-prefill prompt contains the newly relevant memory",
           "Kids are named Sam and Jo" in sink.prompts[0])
+    check("re-prefill delta is just the newly-entered memory",
+          sink.deltas == [["Kids are named Sam and Jo"]])
     check("all three user turns recorded as events", len(be.events) == 3)
 
 

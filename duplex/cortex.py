@@ -39,12 +39,20 @@ from . import role_prompt
 
 
 class ReprefillSink(Protocol):
-    """The transport's hook for swapping the role prompt mid-session. The real
-    implementation (a PersonaPlex sidecar adapter) rebuilds the KV cache from
-    the new prompt plus the replayed conversation history and swaps it in at a
-    step boundary; the prototype/tests use a recording fake."""
+    """The transport's hook for updating what the model knows mid-session.
 
-    def reprefill(self, prompt: str) -> None: ...
+    Reading the port's source (moshi_mlx LmGen) settled how this must work: the
+    KV cache is causal and front-anchored, stepped one 80ms audio frame per
+    gen.step(), so rebuilding it around a new system prompt costs ~one step per
+    frame of history — roughly the conversation's own length. Full "re-prefill
+    everything" is therefore off the table for a live turn. The viable moves are
+    (a) inject only the DELTA (newly-relevant memories) as text into the ongoing
+    stream at a pause — cheap, no reset — or (b) reset_streaming() + new prompt
+    at a genuine break. So the sink receives BOTH the full target prompt (for a
+    boundary reset) and ``added`` (the new memories, for cheap append). The
+    adapter picks the strategy; the prototype/tests use a recording fake."""
+
+    def reprefill(self, prompt: str, added: list[str]) -> None: ...
 
 
 class Backend(Protocol):
@@ -134,13 +142,14 @@ class Cortex:
         target = plan_reprefill(self._in_context, candidate, self._cfg.min_new_memories)
         if target is None:
             return False
+        added = [m for m in target if m not in set(self._in_context)]   # delta for append mode
         prompt, dropped = self._render(target)
         self._in_context = target
         self._prefills += 1
         if dropped:
             print(f"[cortex] re-prefill #{self._prefills}: dropped {dropped} oldest "
                   f"memories to fit budget")
-        self._sink.reprefill(prompt)
+        self._sink.reprefill(prompt, added)
         return True
 
     def on_assistant_turn(self, text: str) -> None:

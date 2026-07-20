@@ -9,11 +9,35 @@ per-turn prompt assembly our memory system rides on.
 
 The design bet under test: **memory can still work** via
 (1) session-start injection of the role prompt, and
-(2) background re-prefill ("hot swap") — rebuild the KV cache as
-`[updated memory prompt] + [replayed session token history]` and swap it in
-at a step boundary, driven by the existing Ollama LLM running recall in the
+(2) mid-session updates driven by the existing Ollama LLM running recall in the
 background. Memory *writes* never involve the speech model: transcripts flow
 into the existing harvest path, so the DATA-SAFETY contract is untouched.
+
+### Cache constraint (from reading the port's source — reshapes the design)
+
+`personaplex-mlx` runs moshi_mlx's `LmGen`: a **causal** KV cache stepped **one
+80ms audio frame per `gen.step()`**, with the system prompt prefilled at the
+front via `gen.text_prompt_tokens = tokenizer.encode(wrap_with_system_tags(p))`
+then `gen.step_system_prompts()`; `reset_streaming()` clears it.
+
+Because the cache is front-anchored, replacing the system prompt means
+recomputing everything after it — the whole conversation's audio history,
+replayed one step per frame. That is ~conversation-length wall time: **~750
+steps (~50s) per minute of history** at the port's ~68ms/step. So the original
+"re-prefill = rebuild `[new prompt] + [replayed history]`" idea is **not viable
+for a live turn** — same cache-prefix constraint that prompt caching lives under.
+
+The two cheap moves that survive, both implemented in `duplex/personaplex_sink.py`:
+
+- **Append the delta** (default): inject only the *newly-relevant* memories as
+  text into the ongoing stream at a pause — no reset, no replay, O(delta). It's
+  out-of-distribution (the model never saw system text mid-dialogue), so its
+  behaviour is what **experiment 3** must check.
+- **Boundary reset**: at a genuine topic break, `reset_streaming()` + fresh
+  prompt. Cheap, but drops in-session short-term memory (what was just said).
+
+Session-start injection (1) stays the primary, always-cheap mechanism and fully
+covers the ≤`RECALL_THRESHOLD` "perfect recall" case; (2) is these two deltas.
 
 ## What's built so far (runs off a Mac too)
 
@@ -23,23 +47,26 @@ into the existing harvest path, so the DATA-SAFETY contract is untouched.
   WHOLE store and (`--launch`) starts the MLX port with it. `--bare` control.
 - `duplex/cortex.py` — the background brain: the WRITE + RECALL orchestration
   that would run alongside PersonaPlex. Records each user turn as an L0 event,
-  decides when newly-relevant recall warrants a re-prefill (`plan_reprefill`),
-  and harvests durable facts at session end — all through the *existing* memory
+  decides when newly-relevant recall warrants a mid-session update
+  (`plan_reprefill`), passing the sink both the full prompt and the *delta*, and
+  harvests durable facts at session end — all through the *existing* memory
   functions (`select_memories`, `record_event`, `harvest_session_facts`,
-  `add_harvested_facts`). The actual KV-cache swap is left behind the
-  `ReprefillSink` interface — that's the one seam that needs the port's
-  generation loop, wired on the Mac once experiment 2 confirms prefill is fast.
+  `add_harvested_facts`).
+- `duplex/personaplex_sink.py` — the `ReprefillSink` adapter, written against the
+  port's real API (append-delta + boundary-reset per the cache constraint
+  above). On-device scaffolding: every port symbol is marked `VERIFY` and must
+  be confirmed against the installed package; a `LoggingSink` fallback lets the
+  wiring run with no MLX.
 - `tests/test_duplex_cortex.py` — dependency-free tests (no strata/Ollama/MLX,
-  so they run in CI and here) covering prompt budgeting, the re-prefill
-  decision, small-store-never-swaps, topic-shift-triggers-one-swap, and
-  harvest-on-finish. `python tests/test_duplex_cortex.py` → 26 pass.
+  so they run in CI and here) covering prompt budgeting, the update decision,
+  delta computation, small-store-never-swaps, topic-shift-triggers-one-update,
+  and harvest-on-finish. `python tests/test_duplex_cortex.py` → 27 pass.
 
 The cortex is transport-agnostic: `StrataBackend` wraps the real pipeline for
 the Mac, `FakeBackend` (in the test) scripts recall/harvest for verification.
 What remains for a live duplex mode is the transport itself — a PersonaPlex
-sidecar speaking WebSocket audio, Parakeet on the user side, and a
-`ReprefillSink` implementation that replays history into a rebuilt cache. That
-last piece is gated on experiment 2's numbers, below.
+sidecar speaking WebSocket audio, Parakeet on the user side, and the sink's
+`VERIFY` symbols confirmed + its `drain()` wired into the port's step loop.
 
 ## Setup (Apple Silicon Mac, Python 3.12)
 
@@ -76,11 +103,11 @@ Probe checklist (ask out loud, compare injected vs `--bare`):
 - [ ] Prompt budget: default 2000 chars — does a maxed-out prompt degrade responsiveness or leak into speech (reading memories aloud)?
 - [ ] Feel: interruptions, pauses, backchannels vs our pipeline — the reason we're here
 
-## Experiment 2 — prefill speed (the load-bearing number for re-prefill)
+## Experiment 2 — step time + RAM (confirms the cache constraint, sizes the machine)
 
-The hot-swap design only works if rebuilding a cache over a few thousand
-tokens takes ~a second, not minutes. Offline mode measures this without any
-new code: time-to-first-audio ≈ prefill time of the text prompt.
+Source-reading already told us full mid-session re-prefill is impractical (one
+step per frame of history). This experiment just quantifies the step cost that
+implies, and confirms the model fits. Offline mode needs no new code:
 
 ```bash
 say --data-format=LEI16@24000 -o probe.wav "What do you remember about me?"
@@ -90,23 +117,32 @@ time python -m personaplex_mlx.offline --voice NATF2 \
   --seed 42424242
 ```
 
-Run once with a ~200-char prompt and once with the full ~2000-char prompt;
-the delta is the prefill cost. Also note steady-state step time (the port
-reported ~68 ms/step ≈ RTF 0.87 on M2 Max — confirm on this machine).
-`--seed` makes offline runs repeatable, so this doubles as a deterministic
-A/B harness for prompt wording later.
+`--seed` makes offline runs repeatable, so this doubles as a deterministic A/B
+harness for prompt wording later.
 
-- [ ] Prefill rate: ______ tokens/sec → 2k-token history rebuild ≈ ______ s
-- [ ] Steady-state: ______ ms/step (must stay < 80 ms for real-time)
-- [ ] RAM high-water mark with model resident: ______ GB
+- [ ] Steady-state: ______ ms/step (must stay < 80 ms for real-time; port
+      reported ~68 ms ≈ RTF 0.87 on M2 Max)
+- [ ] Implied replay cost: (60000 / step_ms) steps/min of history = ______ s per
+      minute → confirms boundary reset must land at breaks, not mid-turn
+- [ ] RAM high-water mark with model resident: ______ GB (16 GB Macs: does it
+      fit alongside Ollama, or must the chat model be evicted first?)
 
-## Experiment 3 — naive mid-stream text injection (only if 1 & 2 look good)
+## Experiment 3 — mid-stream delta injection (the real update mechanism)
 
-Force text tokens into the stream mid-session *without* re-prefilling.
-Out-of-distribution — the model never trained on system text appearing
-mid-dialogue — so expect weirdness (reading the memory aloud, ignoring it).
-Requires poking at the port's generation loop; worth one afternoon at most,
-and only to see whether we can skip the full re-prefill machinery sometimes.
+Now load-bearing, not optional: this is how memory updates reach a live session
+(`personaplex_sink.py`, append strategy). Inject a short memory delta as text
+into the ongoing stream without a reset, and watch what the model does with it.
+Out-of-distribution, so the failure modes are the point:
+
+- [ ] Does it silently absorb the new fact and use it when relevant?
+- [ ] Does it read the injected text aloud (leak)? Reword `append_template` if so.
+- [ ] Does it ignore it entirely? If so, injection-only can't do live updates and
+      we fall back to boundary reset at pauses (or session-start injection only).
+- [ ] Latency of a `drain()` append at a frame boundary — any audible hitch?
+
+First confirm the sink's `VERIFY` symbols against the installed port (how it
+feeds extra text tokens mid-stream may differ from the session-start path), then
+wire `drain()` into the step loop.
 
 ## What a real integration would look like (if the bets hold)
 
