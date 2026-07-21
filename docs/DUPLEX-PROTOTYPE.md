@@ -96,12 +96,34 @@ python duplex/personaplex_prompt.py --launch --bare   # control: no memories
 
 Probe checklist (ask out loud, compare injected vs `--bare`):
 
-- [ ] Name recall: "do you remember my name?" — uses profile name, doesn't invent one
-- [ ] Unprompted relevance: steer near a stored fact without naming it — does it surface naturally?
-- [ ] Negative probe: ask about something NOT in memory — does it admit not knowing, or confabulate? (7B Moshi-family models confabulate readily; measure how badly)
-- [ ] Rules: set a standing rule in the prompt (e.g. "never call them buddy") — does it hold for a whole session?
-- [ ] Prompt budget: default 2000 chars — does a maxed-out prompt degrade responsiveness or leak into speech (reading memories aloud)?
-- [ ] Feel: interruptions, pauses, backchannels vs our pipeline — the reason we're here
+- [x] Name recall: **works but ~75% reliable** (6/8 seeds, deterministic offline
+      harness `scratchpad/exp2/seed_sweep.py`; live session missed — variance +
+      ASR noise). When it hits it's often messy: confuses itself with the user
+      ("*this is* Steven") and flips the profile's two name fields (Steven↔Stephen).
+- [x] Unprompted relevance: **passes** — 2/8 seeds spontaneously opened with the
+      stored *coaching* memory ("let's start the coaching") without being asked.
+- [x] Negative probe: bare control **confabulates hard** ("the name of the actor
+      who played the role in the movie…"). Injected condition is safer (admits/asks).
+- [~] Rules (brief, no lists): held acceptably offline; live felt loose ("dumb as
+      bricks" per operator). Not rigorously measured yet.
+- [ ] Prompt budget: not yet stressed (ran at 1402/2000 chars).
+- [~] Feel: live session — novel (real barge-in/backchannel) but the 7B is weak
+      and inconsistent; operator's overall read was underwhelmed.
+
+Promptcraft finding (matters for `role_prompt.py`): the **natural 3rd-person
+persona prompt beats explicit instructions**. "The user's name is Steven" made
+the model refuse ("I can't access your name"); the current
+"You are Sage, Steven's personal voice assistant… Their full name is…" phrasing
+is what recalled correctly. Do **not** rewrite role_prompt to be more directive.
+Reliability lever (tested, `scratchpad/exp2/temp_sweep.py`): lowering
+`--text-temp` monotonically raises name recall — **0.7→75%, 0.5→88%, 0.3→88%,
+0.1→100%** (8 seeds each). But two caveats the hit-rate hides: (1) low temp
+induces repetition/looping ("Hi, this is Steven. Hi, this is Steven…") — costs
+the naturalness duplex exists for; ~0.3 is the sweet spot. (2) A
+**temp-independent persona-confusion wart** persists at every temp — the model
+introduces *itself* as Steven ("this is Steven") instead of addressing the user,
+flips Steven↔Stephen, and misattributes ("It's Dan"). Verdict: reliability is
+tunable, polish is 7B-limited. Needs a live feel-check at temp 0.3.
 
 ## Experiment 2 — step time + RAM (confirms the cache constraint, sizes the machine)
 
@@ -120,12 +142,17 @@ time python -m personaplex_mlx.offline --voice NATF2 \
 `--seed` makes offline runs repeatable, so this doubles as a deterministic A/B
 harness for prompt wording later.
 
-- [ ] Steady-state: ______ ms/step (must stay < 80 ms for real-time; port
-      reported ~68 ms ≈ RTF 0.87 on M2 Max)
-- [ ] Implied replay cost: (60000 / step_ms) steps/min of history = ______ s per
-      minute → confirms boundary reset must land at breaks, not mid-turn
-- [ ] RAM high-water mark with model resident: ______ GB (16 GB Macs: does it
-      fit alongside Ollama, or must the chat model be evicted first?)
+- [x] Steady-state: **32.9 ms/step** (p50 over 295 steps; mean 32.9, p90 33.4,
+      max 38.9) on an M4 Pro / 48 GB — RTF 0.41, ~47 ms headroom. Half the
+      port's ~68 ms on M2 Max, so real-time is comfortable.
+- [x] Implied replay cost: 750 frames/min × 32.9 ms = **~24.7 s to replay 1 min**
+      of history → mid-turn full re-prefill still a non-starter (better than the
+      ~50 s the 68 ms figure implied, still unusable live). Boundary reset must
+      land at breaks, not mid-turn — confirmed.
+- [x] RAM high-water mark: **10.4 GB** MLX peak footprint (max RSS 4.0 GB),
+      4-bit. Fits alongside Ollama on 48 GB; a 16 GB Mac must evict the chat
+      model first. Session-start prefill of the 321-token role prompt: 1.29 s
+      (one-time).
 
 ## Experiment 3 — mid-stream delta injection (the real update mechanism)
 
@@ -157,10 +184,31 @@ wire `drain()` into the step loop.
   the recommended qwen3.6 36B on knowledge and instruction-following, so the
   classic pipeline remains the smart mode.
 
+## Verdict (2026-07-20, M4 Pro)
+
+**No-go on PersonaPlex-7B as a memory-bearing conversation mode.** The plumbing
+all works — two-venv bridge, session-start injection, deterministic timing — and
+the memory *mechanism* is sound (injection lands; recall tunable to 100% via
+text-temp). But the 7B backbone is simply **too weak**: even at max reliability
+it introduces itself as the user, flips the user's name, misattributes stored
+facts, and turns robotic/loopy at the low temps that buy reliability. It never
+crosses the bar of feeling like it knows you. The blocker is model capability,
+not integration — so no transport was built (correctly gated on exp-1 passing,
+which it didn't). Revisit only if a materially stronger full-duplex model ships
+(PersonaPlex is 7B-only today) or a larger backbone can be run elsewhere.
+
+What survives for a future attempt: the timing/RAM numbers, the promptcraft
+finding (natural persona > explicit instructions), the text-temp reliability
+curve, and all the transport-agnostic cortex/prompt scaffolding (untouched,
+tests green).
+
 ## Findings
 
 (fill in after the Mac runs)
 
 | Date | Machine | Experiment | Result |
 |------|---------|------------|--------|
-|      |         |            |        |
+| 2026-07-20 | M4 Pro / 48 GB | Setup | Port needs its own venv — Strata pins (numpy 2.5, mlx 0.31, torch 2.12, hf-hub 1.21) conflict hard with the port's (numpy <2.3, mlx <0.27, torch <2.8, hf-hub <0.29). Two-venv bridge: Strata venv builds the prompt, port venv (3.12, personaplex-mlx 0.3.0) runs the model. `PERSONAPLEX_PYTHON` env var added to `personaplex_prompt.py --launch`. |
+| 2026-07-20 | M4 Pro / 48 GB | 2 (timing/RAM) | **32.9 ms/step** p50 (RTF 0.41, 47 ms headroom); replay ~24.7 s/min-history (mid-turn re-prefill still dead); **10.4 GB** peak footprint (fits w/ Ollama on 48 GB); session-start prefill 1.29 s / 321 tok. Offline run produced coherent audio + text. |
+| 2026-07-20 | M4 Pro / 48 GB | 1 (memory injection) | **Mixed / yellow light.** Session-start injection *works* — name recalled **6/8 seeds (75%)**, coaching memory surfaced unprompted 2/8; bare control confabulates hard. But recall is flaky + messy (self/user confusion, Steven↔Stephen), and the live session felt weak ("dumb as bricks"). Promptcraft: natural 3rd-person persona > explicit "user's name is X" (the latter triggers refusals). **Reliability lever confirmed: text-temp 0.7→0.1 lifts recall 75%→100%** (0.3=88%, sweet spot); but low temp induces looping and a temp-independent persona-confusion wart ("introduces itself as Steven") remains. Reliability tunable, polish 7B-limited. Not a clean pass. |
+| 2026-07-20 | M4 Pro / 48 GB | 1 live @ temp 0.3 | Operator feel-check: **NO-GO — "model is just way too dumb."** Reliability lever helped the metric but not the felt experience; 7B backbone is the ceiling. Transport not built. |

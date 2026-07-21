@@ -1,5 +1,11 @@
 # Duplex mode — handoff to a Mac session
 
+> **CONCLUDED 2026-07-20 (M4 Pro): no-go.** Experiments 1–2 ran; the mechanism
+> works but PersonaPlex-7B is too weak to feel like it knows the user, so no
+> transport was built. Full verdict + numbers in
+> [DUPLEX-PROTOTYPE.md](DUPLEX-PROTOTYPE.md). The steps below are kept for the
+> record / a future stronger-model retry.
+
 You're a Claude Code session running locally on the Mac (Apple Silicon, MLX +
 Ollama available). This picks up feasibility work on adding **PersonaPlex**
 (NVIDIA full-duplex speech-to-speech) as an optional conversation mode. All the

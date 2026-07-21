@@ -80,6 +80,10 @@ def main() -> None:
                     help="PersonaPlex voice id (NATF0-3, NATM0-3, VARF0-4, VARM0-4)")
     ap.add_argument("-q", "--quant", default="4",
                     help="quantization bits for the MLX port (default 4)")
+    ap.add_argument("--text-temp", default=None,
+                    help="port text sampling temp; lower = more reliable memory "
+                         "recall, higher = more natural (0.3 balances; see "
+                         "docs/DUPLEX-PROTOTYPE.md exp-1 findings)")
     ap.add_argument("--budget", type=int, default=DEFAULT_BUDGET,
                     help=f"max prompt characters (default {DEFAULT_BUDGET})")
     ap.add_argument("--bare", action="store_true",
@@ -100,13 +104,20 @@ def main() -> None:
     print(f"[bridge] {len(prompt)} chars", file=sys.stderr)
 
     if args.launch:
-        cmd = [sys.executable, "-m", "personaplex_mlx.local_web",
+        # The port pins numpy/mlx/torch far below Strata's, so it can't live in
+        # this interpreter's venv; PERSONAPLEX_PYTHON points at the port venv's
+        # python. Defaults to sys.executable for single-venv installs.
+        launch_python = os.environ.get("PERSONAPLEX_PYTHON", sys.executable)
+        cmd = [launch_python, "-m", "personaplex_mlx.local_web",
                "-q", str(args.quant), "--voice", args.voice,
                "--text-prompt", prompt]
+        if args.text_temp is not None:
+            cmd += ["--text-temp", str(args.text_temp)]
         print(f"[bridge] launching: personaplex_mlx.local_web "
-              f"(voice={args.voice}, q={args.quant}) — http://localhost:8998",
+              f"(voice={args.voice}, q={args.quant}) — http://localhost:8998"
+              f"\n[bridge] interpreter: {launch_python}",
               file=sys.stderr)
-        os.execv(sys.executable, cmd)
+        os.execv(launch_python, cmd)
 
 
 if __name__ == "__main__":
