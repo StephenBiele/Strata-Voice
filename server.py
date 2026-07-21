@@ -119,6 +119,14 @@ DEFAULT_SETTINGS = {
                                          # (detection can lag soft starts by 300-400ms,
                                          # so a short lead-in clips first words)
     "vad_min_speech_ms": 250,            # ignore blips shorter than this
+    # Semantic endpointing (experimental): after a pause, a tiny model decides
+    # whether your thought is actually complete before it replies — so it waits
+    # when you're mid-sentence and answers instantly when you're done, instead of
+    # ending on the raw silence timer. Off by default; the silence timer is the
+    # fallback. threshold = P(complete) needed to end the turn (higher = more
+    # patient, waits for a clearer finish).
+    "semantic_endpoint": False,
+    "semantic_endpoint_threshold": 0.5,
     "debug_settings": False,             # show the in-call tuning panel
 }
 # What a POST /settings is allowed to write (api_key handled separately).
@@ -130,7 +138,8 @@ SETTINGS_FIELDS = (
     "llm_temperature", "llm_top_p", "llm_max_tokens", "llm_num_ctx",
     "asr_model", "asr_backend", "mic_device", "memory_model", "web_search", "proactive",
     "vad_enabled", "vad_barge_in", "vad_threshold", "vad_silence_ms",
-    "vad_prefix_ms", "vad_min_speech_ms", "debug_settings",
+    "vad_prefix_ms", "vad_min_speech_ms",
+    "semantic_endpoint", "semantic_endpoint_threshold", "debug_settings",
 )
 
 # Speech-recognition model catalog. Each entry is a (model id + loader backend)
@@ -155,7 +164,8 @@ ASR_MODELS = [
      "blurb": "Newest multilingual. Very good speed & accuracy (experimental)."},
 ]
 # Numeric settings and their coercion (so JSON strings from the UI store cleanly).
-_FLOAT_FIELDS = {"tts_speed", "llm_temperature", "llm_top_p", "vad_threshold"}
+_FLOAT_FIELDS = {"tts_speed", "llm_temperature", "llm_top_p", "vad_threshold",
+                 "semantic_endpoint_threshold"}
 _INT_FIELDS = {"tts_gap_ms", "llm_max_tokens", "llm_num_ctx",
                "vad_silence_ms", "vad_prefix_ms", "vad_min_speech_ms"}
 
@@ -411,7 +421,7 @@ def _save_settings(partial: dict) -> dict:
         if k in partial:
             v = partial[k]
             if k in ("thinking", "configured", "vad_enabled", "vad_barge_in",
-                     "debug_settings"):
+                     "semantic_endpoint", "debug_settings"):
                 v = bool(v)
             elif k in _FLOAT_FIELDS:
                 try: v = float(v)
@@ -991,6 +1001,25 @@ class VadHandler(BaseHTTPRequestHandler):
                     _vad_sv = StreamingVad(_vad_model, cfg)
                     return self._json(200, {"ok": True, "clock_preserved": False,
                                             "config": cfg.to_dict()})
+            if u.path == "/vad/endpoint":
+                # Semantic turn-end: given the just-finished utterance audio
+                # (raw 16 kHz int16, same wire format as /vad/feed), decide
+                # whether it's a complete thought. Fail-open — any error returns
+                # complete=True so a turn can never hang waiting on this.
+                data = self._body()
+                if len(data) % 2:
+                    data = data[:-1]
+                samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+                try:
+                    import smart_turn
+                    prob = smart_turn.predict(samples)
+                except Exception as e:
+                    print(f"[vad] smart-turn failed: {e}")
+                    return self._json(200, {"ok": False, "error": str(e),
+                                            "complete": True, "prob": 1.0})
+                thr = float(_settings().get("semantic_endpoint_threshold", 0.5))
+                return self._json(200, {"ok": True, "prob": prob,
+                                        "complete": prob >= thr, "threshold": thr})
             if u.path == "/vad/stop":
                 _vad_sv = None
                 return self._json(200, {"ok": True})
