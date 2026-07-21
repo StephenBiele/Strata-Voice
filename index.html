@@ -1402,6 +1402,15 @@
         <div class="hint">Lower picks up quieter speech; higher ignores more background noise.</div>
       </div>
       <div class="field">
+        <label>Conversation pace</label>
+        <div class="chips" id="set_pace_chips">
+          <button type="button" class="chip" data-pace="eager">Eager</button>
+          <button type="button" class="chip" data-pace="balanced">Balanced</button>
+          <button type="button" class="chip" data-pace="patient">Patient</button>
+        </div>
+        <div class="hint">How assertively it jumps in. Eager replies fast but may cut you off mid-thought; Patient waits so you can finish. Fine-tune the exact pause below.</div>
+      </div>
+      <div class="field">
         <label>Pause before it replies · <span class="speedval" id="set_vad_silenceval">500 ms</span></label>
         <input type="range" id="set_vad_silence" class="slider" min="150" max="2000" step="50" value="500">
         <div class="hint">How long a silence ends your turn. Shorter feels snappier; longer lets you think mid-sentence.</div>
@@ -2101,6 +2110,7 @@ async function loadSettings(){
   $("#set_vad_thresh").value=vth; $("#set_vad_threshval").textContent=Number(vth).toFixed(2).replace(/0$/,"");
   const vsil=(s.vad_silence_ms!=null?s.vad_silence_ms:1000);
   $("#set_vad_silence").value=vsil; $("#set_vad_silenceval").textContent=vsil+" ms";
+  if(typeof syncPaceChips==="function") syncPaceChips();
   const vpre=(s.vad_prefix_ms!=null?s.vad_prefix_ms:500);
   $("#set_vad_prefix").value=vpre; $("#set_vad_prefixval").textContent=vpre+" ms";
   const vmin=(s.vad_min_speech_ms!=null?s.vad_min_speech_ms:250);
@@ -3560,7 +3570,25 @@ $("#set_trim").addEventListener("click",(e)=>{
 $("#set_preview").addEventListener("click", previewVoice);
 // hands-free settings: live value labels + toggles
 $("#set_vad_thresh").addEventListener("input",(e)=>{ $("#set_vad_threshval").textContent=Number(e.target.value).toFixed(2).replace(/0$/,""); });
-$("#set_vad_silence").addEventListener("input",(e)=>{ $("#set_vad_silenceval").textContent=e.target.value+" ms"; });
+$("#set_vad_silence").addEventListener("input",(e)=>{ $("#set_vad_silenceval").textContent=e.target.value+" ms"; syncPaceChips(); });
+// Conversation-pace presets: named shortcuts over the raw pause slider (the
+// stored setting is still vad_silence_ms). Active chip is derived from the
+// current pause, so dragging the slider off a preset value falls back to custom.
+const PACE_PRESETS={eager:350,balanced:800,patient:1400};
+function syncPaceChips(){
+  const v=parseInt($("#set_vad_silence").value,10);
+  document.querySelectorAll("#set_pace_chips .chip").forEach(c=>{
+    c.classList.toggle("active", PACE_PRESETS[c.dataset.pace]===v);
+  });
+}
+document.querySelectorAll("#set_pace_chips .chip").forEach(c=>{
+  c.addEventListener("click",()=>{
+    const ms=PACE_PRESETS[c.dataset.pace];
+    $("#set_vad_silence").value=ms;
+    $("#set_vad_silenceval").textContent=ms+" ms";
+    syncPaceChips();
+  });
+});
 $("#set_vad_prefix").addEventListener("input",(e)=>{ $("#set_vad_prefixval").textContent=e.target.value+" ms"; });
 $("#set_vad_minspeech").addEventListener("input",(e)=>{ $("#set_vad_minspeechval").textContent=e.target.value+" ms"; });
 ["set_vad_bargein","set_debug"].forEach(id=>{
