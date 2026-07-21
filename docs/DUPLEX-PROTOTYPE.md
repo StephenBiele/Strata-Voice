@@ -202,6 +202,12 @@ finding (natural persona > explicit instructions), the text-temp reliability
 curve, and all the transport-agnostic cortex/prompt scaffolding (untouched,
 tests green).
 
+**Could fine-tuning rescue it?** Partly — the felt failures are largely a
+distribution mismatch (PersonaPlex was tuned as a banking service agent), which
+is LoRA-addressable; the Helium-7B capability ceiling is not. Full analysis,
+hardware reality, dataset ranking, and a data-generation pipeline sketch in
+[DUPLEX-FINETUNE.md](DUPLEX-FINETUNE.md).
+
 ## Findings
 
 (fill in after the Mac runs)
