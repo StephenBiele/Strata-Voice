@@ -1415,6 +1415,18 @@
         <input type="range" id="set_vad_silence" class="slider" min="150" max="2000" step="50" value="500">
         <div class="hint">How long a silence ends your turn. Shorter feels snappier; longer lets you think mid-sentence.</div>
       </div>
+      <div class="switchrow">
+        <div>
+          <div class="switchlabel">Wait until you're done talking</div>
+          <div class="switchsub">Instead of replying after a fixed pause, a tiny on-device model checks whether your thought is actually finished — so it waits when you trail off mid-sentence and answers the moment you're done. The pause timer above stays as the fallback.</div>
+        </div>
+        <button class="switch" id="set_semantic" role="switch" aria-checked="false"><span class="knob"></span></button>
+      </div>
+      <div class="field adv">
+        <label>How sure it must be you're done · <span class="speedval" id="set_semantic_threshval">0.50</span></label>
+        <input type="range" id="set_semantic_thresh" class="slider" min="0.3" max="0.9" step="0.05" value="0.5">
+        <div class="hint">Higher waits for a clearer finish (fewer interruptions); lower replies sooner. Only applies when the setting above is on.</div>
+      </div>
       <div class="field adv">
         <label>Lead-in padding · <span class="speedval" id="set_vad_prefixval">500 ms</span></label>
         <input type="range" id="set_vad_prefix" class="slider" min="0" max="800" step="50" value="500">
@@ -1582,6 +1594,13 @@ let vadCfg={ vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:1000,
 let vadRing=null;           // rolling 16 kHz Float32 buffer of the last ~30 s
 const VAD_RING_LEN=16000*30;
 let ringAbs=0;              // absolute samples captured (ring write head)
+// Semantic endpointing: when a pause looks like a mid-thought trail-off, hold the
+// turn (keep listening) instead of replying. All bounded so it can never hang.
+let semHoldStart=null;      // preserved start-ms of a held (incomplete) turn, else null
+let semHoldTimer=null;      // fallback: commit the held turn if no continuation arrives
+let semHoldCount=0;         // consecutive holds — capped so it always commits
+const SEM_HOLD_MS=2600;     // wait this long for you to keep talking before committing anyway
+const SEM_MAX_HOLDS=3;      // never hold more than this many times in a row
 let sentAbs=0;              // absolute samples successfully fed to the detector
 let feedChunks=[], feedLen=0, feedInFlight=false, vadFailures=0;
 let pendingStartMs=null;    // detector ms of the current utterance's start
@@ -1821,11 +1840,14 @@ async function start(textMode=false){
              vad_threshold: parseFloat(s.vad_threshold)||0.5,
              vad_silence_ms: parseInt(s.vad_silence_ms)||500,
              vad_prefix_ms: parseInt(s.vad_prefix_ms)||500,
-             vad_min_speech_ms: parseInt(s.vad_min_speech_ms)||250 };
+             vad_min_speech_ms: parseInt(s.vad_min_speech_ms)||250,
+             semantic_endpoint: !!s.semantic_endpoint,
+             semantic_endpoint_threshold: parseFloat(s.semantic_endpoint_threshold)||0.5 };
     vadDebugBtn.hidden=!s.debug_settings;
   }catch(_){
     vadCfg={vad_barge_in:true, vad_threshold:0.5, vad_silence_ms:1000,
-            vad_prefix_ms:500, vad_min_speech_ms:250};
+            vad_prefix_ms:500, vad_min_speech_ms:250,
+            semantic_endpoint:false, semantic_endpoint_threshold:0.5};
   }
   if(textMode){
     // quiet / text mode: mic off, replies come back as text — one tap on the
@@ -2115,6 +2137,9 @@ async function loadSettings(){
   $("#set_vad_prefix").value=vpre; $("#set_vad_prefixval").textContent=vpre+" ms";
   const vmin=(s.vad_min_speech_ms!=null?s.vad_min_speech_ms:250);
   $("#set_vad_minspeech").value=vmin; $("#set_vad_minspeechval").textContent=vmin+" ms";
+  setSwitch($("#set_semantic"), !!s.semantic_endpoint);
+  const sthr=(s.semantic_endpoint_threshold!=null?s.semantic_endpoint_threshold:0.5);
+  $("#set_semantic_thresh").value=sthr; $("#set_semantic_threshval").textContent=Number(sthr).toFixed(2);
   // memory model picker (background memory work; "" = same as chat model).
   // Lists whatever the active backend serves: Ollama tags, or GET {base}/models
   // on any OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp, OpenAI…).
@@ -2319,6 +2344,8 @@ async function saveSettings(){
     vad_silence_ms:parseInt($("#set_vad_silence").value,10),
     vad_prefix_ms:parseInt($("#set_vad_prefix").value,10),
     vad_min_speech_ms:parseInt($("#set_vad_minspeech").value,10),
+    semantic_endpoint:$("#set_semantic").getAttribute("aria-checked")==="true",
+    semantic_endpoint_threshold:parseFloat($("#set_semantic_thresh").value),
     debug_settings:$("#set_debug").getAttribute("aria-checked")==="true",
   }, collectModelConfig("set"));
   // did the speech-recognition pick change? if so it may need to (down)load.
@@ -2992,6 +3019,48 @@ async function hfPump(){
   }
 }
 
+function clearSemHold(){ if(semHoldTimer){ clearTimeout(semHoldTimer); semHoldTimer=null; } semHoldStart=null; semHoldCount=0; }
+function sliceRing(startMs, endMs){
+  const s0=Math.max(startMs*16, ringAbs-VAD_RING_LEN, 0);
+  const s1=Math.min(endMs*16, ringAbs);
+  if(s1<=s0) return null;
+  const out=new Float32Array(s1-s0);
+  for(let i=s0;i<s1;i++) out[i-s0]=vadRing[i%VAD_RING_LEN];
+  return out;
+}
+function f32ToInt16Bytes(f32){
+  const b=new ArrayBuffer(f32.length*2), dv=new DataView(b);
+  for(let i=0;i<f32.length;i++){ let s=Math.max(-1,Math.min(1,f32[i])); dv.setInt16(i*2, s<0?s*0x8000:s*0x7fff, true); }
+  return b;
+}
+// Decide whether the just-finished utterance is a complete thought. Semantic
+// endpointing OFF (or any error / hold cap reached) => commit immediately, i.e.
+// byte-for-byte the old behaviour. ON + incomplete => keep listening, preserving
+// the original start so a continuation is captured whole, with a hard timeout so
+// it always commits eventually.
+async function commitOrHold(startMs, endMs){
+  const effStart=(semHoldStart!==null)?semHoldStart:startMs;
+  const slice=sliceRing(effStart, endMs);
+  if(!slice){ clearSemHold(); return; }
+  const useSem = vadCfg && vadCfg.semantic_endpoint && semHoldCount<SEM_MAX_HOLDS && !!vadBase;
+  if(!useSem){ clearSemHold(); sendUtterance(encodeWAV(slice,16000,16000)); return; }
+  let complete=true;
+  try{
+    const r=await fetch(vadBase+"/vad/endpoint",{method:"POST",
+      headers:{"Content-Type":"application/octet-stream"}, body:f32ToInt16Bytes(slice)});
+    const j=await r.json();
+    complete=(j&&j.ok)?!!j.complete:true;             // fail-open
+  }catch(_){ complete=true; }                          // fail-open: never hang
+  if(complete){ clearSemHold(); sendUtterance(encodeWAV(slice,16000,16000)); return; }
+  // incomplete: hold — keep listening, remember the original start, arm a fallback
+  semHoldStart=effStart; semHoldCount++;
+  if(state==="listening"||state==="idle") setState("listening");
+  if(semHoldTimer) clearTimeout(semHoldTimer);
+  semHoldTimer=setTimeout(()=>{
+    const st=semHoldStart, s=(st!==null)?sliceRing(st, endMs):null; clearSemHold();
+    if(s && handsFree && !muted) sendUtterance(encodeWAV(s,16000,16000));
+  }, SEM_HOLD_MS);
+}
 function handleVadEvents(events){
   if(muted) return;   // belt + suspenders: the mic is released while muted anyway
   for(const e of events){
@@ -3003,6 +3072,7 @@ function handleVadEvents(events){
         if(turnAbort){ try{ turnAbort.abort(); }catch(_){} }
       }
       pendingStartMs=e.ms;
+      if(semHoldTimer){ clearTimeout(semHoldTimer); semHoldTimer=null; }  // continuing a held turn
       setState("listening");
     }else if(e.kind==="speech_stopped"){
       if(pendingStartMs===null) continue;              // start was suppressed
@@ -3011,17 +3081,13 @@ function handleVadEvents(events){
       const prefix=(vadCfg&&vadCfg.vad_prefix_ms)||500;
       // start already has the prefix subtracted, so true speech excludes it
       const speechMs=(e.ms-sil)-(startMs+prefix);
-      if(speechMs < ((vadCfg&&vadCfg.vad_min_speech_ms)||250)){
+      // blip guard — but never drop a continuation of a semantically-held turn
+      if(semHoldStart===null && speechMs < ((vadCfg&&vadCfg.vad_min_speech_ms)||250)){
         if(!busy && activeSources.length===0 && state==="listening") setState("idle");
         continue;                                      // blip — ignore
       }
       const endMs=e.ms-sil+120;                        // trim the silence tail
-      const s0=Math.max(startMs*16, ringAbs-VAD_RING_LEN, 0);
-      const s1=Math.min(endMs*16, ringAbs);
-      if(s1<=s0) continue;
-      const slice=new Float32Array(s1-s0);
-      for(let i=s0;i<s1;i++) slice[i-s0]=vadRing[i%VAD_RING_LEN];
-      sendUtterance(encodeWAV(slice,16000,16000));
+      commitOrHold(startMs, endMs);                    // semantic gate (no-op when off)
     }
   }
 }
@@ -3478,6 +3544,11 @@ $("#set_proactive").addEventListener("click",(e)=>{
   const on=e.currentTarget.getAttribute("aria-checked")==="true";
   setSwitch(e.currentTarget, !on);
 });
+$("#set_semantic").addEventListener("click",(e)=>{
+  const on=e.currentTarget.getAttribute("aria-checked")==="true";
+  setSwitch(e.currentTarget, !on);
+});
+$("#set_semantic_thresh").addEventListener("input",(e)=>{ $("#set_semantic_threshval").textContent=Number(e.target.value).toFixed(2); });
 /* appearance: auto (follow OS) / light / dark — a per-device choice in localStorage */
 function currentTheme(){ try{ return localStorage.getItem("vc_theme")||"auto"; }catch(_){ return "auto"; } }
 function applyTheme(val){
